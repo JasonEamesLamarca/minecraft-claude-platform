@@ -11,7 +11,14 @@ PORT="${MCAI_TEST_PORT:-25599}"
 OWNER="${MCAI_TEST_OWNER:-Notch}"   # any real Java account name: the image resolves it to a UUID for the whitelist
 export COMPOSE_PROJECT_NAME="mcai-optest"
 step() { printf '\n### %s\n' "$*"; }
-cleanup() { (cd "$WORK" && docker compose down --timeout 60 >/dev/null 2>&1) || true; }
+cleanup() {
+  local rc=$?
+  if (( rc != 0 )); then
+    echo "### FAILED (exit $rc) - recent service logs:"
+    (cd "$WORK" && docker compose ps -a && docker compose logs --no-color --tail 25 gateway ai-worker minecraft) || true
+  fi
+  (cd "$WORK" && docker compose down --timeout 60 >/dev/null 2>&1) || true
+}
 trap cleanup EXIT
 
 step "copy the repository (tracked + new, non-ignored files) to $WORK"

@@ -16,6 +16,7 @@ ENV DISABLE_AUTOUPDATER=1 \
     TMPDIR=/tmp \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
 COPY --chown=root:root src/mcai /app/mcai
-# The node image's "node" user (uid 1000) runs the worker; HOME and /tmp are tmpfs in compose.
+# Default non-root user; compose overrides it with the installing user's UID/GID (secrets are owned by them).
+# HOME and /tmp are tmpfs in compose.
 USER node
 ENTRYPOINT ["python3", "-m", "mcai.worker"]

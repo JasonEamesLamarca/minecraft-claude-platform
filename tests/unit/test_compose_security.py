@@ -118,3 +118,11 @@ def test_claude_code_version_pinned():
     text = (REPO / "containers/claude/Dockerfile").read_text()
     assert re.search(r"ARG CLAUDE_CODE_VERSION=\d+\.\d+\.\d+", text)
     assert "DISABLE_AUTOUPDATER=1" in text
+
+
+def test_services_run_as_installing_user(config, workdir):
+    """Secret files are mode 600 and owned by the installing user, so every service must run as that UID/GID
+    (a fixed UID worked only when the installer happened to have that UID)."""
+    env = dict(l.split("=", 1) for l in (workdir / ".env").read_text().splitlines() if "=" in l and not l.startswith("#"))
+    for name, svc in services(config):
+        assert svc["user"] == f"{env['PUID']}:{env['PGID']}", f"{name} runs as {svc['user']}"

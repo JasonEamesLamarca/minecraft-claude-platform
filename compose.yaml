@@ -168,12 +168,13 @@ services:
       context: .
       dockerfile: containers/claude/Dockerfile
     image: mcai-ai-worker:${MCAI_VERSION:-dev}
-    user: "1000:1000"
+    # Same UID as the installing user: secret files are mode 600 and owned by that user.
+    user: "${PUID}:${PGID}"
     restart: unless-stopped
     read_only: true
     tmpfs:
-      - /tmp:size=256m,uid=1000,gid=1000,mode=0700
-      - /home/worker:size=128m,uid=1000,gid=1000,mode=0700
+      - /tmp:size=256m,uid=${PUID},gid=${PGID},mode=0700
+      - /home/worker:size=128m,uid=${PUID},gid=${PGID},mode=0700
     depends_on:
       gateway:
         condition: service_healthy
