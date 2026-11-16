@@ -7,4 +7,12 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-# Docker, pip and Gradle ecosystems are added as their manifests land (Phases 1-2).
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+# Gradle is added with the Fabric mod (Phase 2).

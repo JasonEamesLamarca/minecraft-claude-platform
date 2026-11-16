@@ -1,7 +1,18 @@
 # Minecraft AI Platform
 
-> **Status: pre-alpha, Phase 0 (repository bootstrap).** Nothing below is installable yet. This README describes
-> what is being built. [`docs/development/TASKS.md`](docs/development/TASKS.md) tracks what actually works.
+> **Status: pre-alpha, Phase 1.** What works today is a hardened Fabric Minecraft server with automatic backups,
+> restore and a setup wizard: see [installation](docs/installation/README.md). The AI integration, automations, SSH
+> console and Atlantis are still being built. [`docs/development/TASKS.md`](docs/development/TASKS.md) tracks what
+> actually works.
+
+## Quick start (what works now)
+
+```bash
+git clone https://github.com/JasonEamesLamarca/minecraft-claude-platform.git
+cd minecraft-claude-platform
+scripts/setup.sh        # checks prerequisites, asks you to accept the Minecraft EULA, generates secrets, starts the server
+scripts/doctor.sh       # health and diagnostics
+```
 
 A self-hosted, Docker Compose–based platform that connects a Minecraft Java Edition server to
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code), for home use:

@@ -1,0 +1,128 @@
+# Minecraft AI Platform - Docker Compose deployment.
+# Run scripts/setup.sh first: it creates .env and secrets/ (both git-ignored), asks you to accept the
+# Minecraft EULA, and validates this file. Then: docker compose up -d
+#
+# Images are pinned by tag AND digest (multi-arch: amd64 + arm64). Dependabot proposes updates.
+# Services added in later phases (gateway, ai-worker, automation, management, ssh-gateway) join the
+# `internal` network; only the game port (and later the SSH gateway port) is published.
+
+name: ${COMPOSE_PROJECT_NAME:-mcai}
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  minecraft:
+    <<: *hardening
+    image: itzg/minecraft-server:2026.10.1-java21@sha256:07ab333a8542208c4c863a78fd3cf3fd1138d5a2e118306e1a316d202f69ab74
+    # Runs as the installing user's UID/GID (written to .env by setup.sh), never as root.
+    user: "${PUID:?Run scripts/setup.sh first}:${PGID:?Run scripts/setup.sh first}"
+    restart: unless-stopped
+    stop_grace_period: 2m
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    environment:
+      # setup.sh only sets TRUE after you explicitly accept https://www.minecraft.net/eula
+      EULA: "${MC_EULA:?Run scripts/setup.sh first}"
+      TYPE: "${MC_TYPE:-FABRIC}"
+      VERSION: "${MC_VERSION:-1.21.1}"
+      FABRIC_LOADER_VERSION: "${MC_FABRIC_LOADER_VERSION:-0.20.1}"
+      # Server mods from Modrinth, "project:versionId" pins an exact build.
+      MODRINTH_PROJECTS: "${MC_MODS:-fabric-api:Mys3P7lK}"
+      MODRINTH_DOWNLOAD_DEPENDENCIES: required
+      MEMORY: "${MC_MEMORY:-4G}"
+      JVM_XX_OPTS: "${MC_JVM_XX_OPTS:--XX:+UseZGC -XX:+ZGenerational}"
+      TZ: "${TZ:-UTC}"
+      MOTD: "${MC_MOTD:-Minecraft AI Platform}"
+      DIFFICULTY: "${MC_DIFFICULTY:-normal}"
+      MAX_PLAYERS: "${MC_MAX_PLAYERS:-10}"
+      VIEW_DISTANCE: "${MC_VIEW_DISTANCE:-10}"
+      LEVEL: "${MC_LEVEL:-world}"
+      # Security defaults: real Minecraft accounts only, whitelist enforced, owner is the only op.
+      ONLINE_MODE: "${MC_ONLINE_MODE:-true}"
+      ENFORCE_SECURE_PROFILE: "true"
+      ENABLE_WHITELIST: "${MC_WHITELIST:-true}"
+      ENFORCE_WHITELIST: "${MC_WHITELIST:-true}"
+      WHITELIST: "${MC_OWNER:?Run scripts/setup.sh first}"
+      OPS: "${MC_OWNER}"
+      # Whitelist: owner is (re-)added at start; players added in-game are kept.
+      EXISTING_WHITELIST_FILE: MERGE
+      # Ops: reset to exactly the owner at every start, so op rights granted in-game do not persist.
+      EXISTING_OPS_FILE: SYNCHRONIZE
+      # RCON: internal network only (never published), password from a Docker secret.
+      ENABLE_RCON: "true"
+      RCON_PORT: "25575"
+      RCON_PASSWORD_FILE: /run/secrets/rcon_password
+      CREATE_CONSOLE_IN_PIPE: "false"
+      ENABLE_AUTOPAUSE: "false"
+      STOP_SERVER_ANNOUNCE_DELAY: "10"
+    secrets:
+      - rcon_password
+    ports:
+      - "${MC_BIND_ADDRESS:-0.0.0.0}:${MC_PORT:-25565}:25565"
+    networks:
+      - edge
+      - internal
+    volumes:
+      - "${MC_DATA_DIR:-./data/minecraft}:/data"
+    mem_limit: "${MC_MEM_LIMIT:-5g}"
+    cpus: "${MC_CPUS:-2.0}"
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD-SHELL", "mc-health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5m
+      retries: 3
+
+  backup:
+    <<: *hardening
+    image: itzg/mc-backup:2026.10.3@sha256:f86cf8466e203ebffaef2c020de35aaafbab18327ce0d3f63253f1b000d131d6
+    user: "${PUID}:${PGID}"
+    restart: unless-stopped
+    depends_on:
+      minecraft:
+        condition: service_healthy
+    environment:
+      RCON_HOST: minecraft
+      RCON_PORT: "25575"
+      RCON_PASSWORD_FILE: /run/secrets/rcon_password
+      SERVER_HOST: minecraft
+      BACKUP_INTERVAL: "${BACKUP_INTERVAL:-24h}"
+      INITIAL_DELAY: "${BACKUP_INITIAL_DELAY:-10m}"
+      PRUNE_BACKUPS_DAYS: "${BACKUP_PRUNE_DAYS:-14}"
+      PAUSE_IF_NO_PLAYERS: "${BACKUP_PAUSE_IF_NO_PLAYERS:-true}"
+      BACKUP_NAME: "${MC_LEVEL:-world}"
+      # Mods are re-downloaded at start; the RCON client files hold the RCON password.
+      EXCLUDES: "*.jar,cache,logs,*.tmp,.rcon-cli.env,.rcon-cli.yaml"
+      TZ: "${TZ:-UTC}"
+    secrets:
+      - rcon_password
+    networks:
+      - internal
+    volumes:
+      - "${MC_DATA_DIR:-./data/minecraft}:/data:ro"
+      - "${BACKUP_DIR:-./backups}:/backups"
+    mem_limit: 256m
+    cpus: "0.5"
+    pids_limit: 128
+
+networks:
+  # Published game port + outbound internet (Mojang auth, mod downloads).
+  edge: {}
+  # Service-to-service traffic only; no route to the outside world.
+  internal:
+    internal: true
+
+secrets:
+  rcon_password:
+    file: ./secrets/rcon_password

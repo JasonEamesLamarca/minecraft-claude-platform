@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -49,3 +50,42 @@ jobs:
         with:
           args: --offline --no-progress --include-fragments './**/*.md'
           fail: true
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck (warnings and errors)
+        run: >
+          docker run --rm -v "$PWD:/mnt" -w /mnt
+          koalaman/shellcheck:v0.10.0@sha256:2097951f02e735b613f4a34de20c40f937a6c8f18ecb170612c88c34517221fb
+          -S warning scripts/*.sh tests/operational/*.sh
+
+  unit-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - name: pytest (setup wizard, compose security invariants, restore safety)
+        run: pytest
+
+  operational:
+    # Full first-start / backup / restore / crash-recovery cycle with a real server (~5 min).
+    # Runs on main and on demand, not on every PR.
+    if: github.event_name != 'pull_request'
+    needs: [unit-tests, shellcheck]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: first start, backup, restore, crash recovery
+        run: tests/operational/first_start.sh "$RUNNER_TEMP/optest"
