@@ -115,7 +115,7 @@ def test_worker_api_rejects_mod_token(tmp_path, token):
 @pytest.mark.parametrize("body, code", [
     ({"player_uuid": "not-a-uuid", "kind": "ask", "text": "x"}, "bad_player"),
     ({"player_uuid": STEVE, "kind": "op", "text": "x"}, "bad_kind"),
-    ({"player_uuid": STEVE, "kind": "build", "text": "x"}, "bad_kind"),
+    ({"player_uuid": STEVE, "kind": "teleport", "text": "x"}, "bad_kind"),
     ({"player_uuid": STEVE, "kind": "ask", "text": ""}, "bad_text"),
     ({"player_uuid": STEVE, "kind": "ask", "text": "x" * 501}, "bad_text"),
 ])

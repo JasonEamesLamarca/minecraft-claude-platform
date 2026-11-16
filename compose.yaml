@@ -39,6 +39,9 @@ services:
       # Server mods from Modrinth, "project:versionId" pins an exact build.
       MODRINTH_PROJECTS: "${MC_MODS:-fabric-api:Mys3P7lK}"
       MODRINTH_DOWNLOAD_DEPENDENCIES: required
+      # Remove older copies of the platform mod before /mods is copied in (upgrades), and nothing else.
+      REMOVE_OLD_MODS: "true"
+      REMOVE_OLD_MODS_INCLUDE: "mcai-fabric-*.jar"
       MEMORY: "${MC_MEMORY:-4G}"
       JVM_XX_OPTS: "${MC_JVM_XX_OPTS:--XX:+UseZGC -XX:+ZGenerational}"
       TZ: "${TZ:-UTC}"
@@ -71,6 +74,7 @@ services:
       MCAI_COMMAND: "${MCAI_COMMAND:-ai}"
       MCAI_ASK_PERMISSION_LEVEL: "${MCAI_ASK_PERMISSION_LEVEL:-0}"
       MCAI_ALLOW_CONSOLE: "${MCAI_ALLOW_CONSOLE:-true}"
+      MCAI_BLOCKS_PER_TICK: "${MCAI_BLOCKS_PER_TICK:-2000}"
     secrets:
       - rcon_password
       - gateway_mod_token
@@ -150,6 +154,14 @@ services:
       AI_DAILY_BUDGET_USD: "${AI_DAILY_BUDGET_USD:-2.00}"
       AI_REQUEST_TIMEOUT_SECONDS: "${AI_REQUEST_TIMEOUT_SECONDS:-180}"
       AUDIT_LOG_TEXT: "${AUDIT_LOG_TEXT:-false}"
+      AI_BUILD_MIN_OP_LEVEL: "${AI_BUILD_MIN_OP_LEVEL:-4}"
+      AI_BUILD_TIMEOUT_SECONDS: "${AI_BUILD_TIMEOUT_SECONDS:-420}"
+      AI_APPROVE_TTL_SECONDS: "${AI_APPROVE_TTL_SECONDS:-900}"
+      AI_BUILD_MAX_BLOCKS: "${AI_BUILD_MAX_BLOCKS:-40000}"
+      AI_BUILD_MAX_X: "${AI_BUILD_MAX_X:-48}"
+      AI_BUILD_MAX_Y: "${AI_BUILD_MAX_Y:-64}"
+      AI_BUILD_MAX_Z: "${AI_BUILD_MAX_Z:-48}"
+      AI_BUILD_MAX_DISTANCE: "${AI_BUILD_MAX_DISTANCE:-64}"
     secrets:
       - gateway_mod_token
       - worker_token
@@ -186,6 +198,8 @@ services:
       AI_CREDENTIAL_FILE: /run/secrets/ai_credential
       AI_MODEL: "${AI_MODEL:-}"
       AI_MAX_REQUEST_USD: "${AI_MAX_REQUEST_USD:-0.25}"
+      AI_MAX_BUILD_USD: "${AI_MAX_BUILD_USD:-1.00}"
+      AI_BUILD_MAX_TURNS: "${AI_BUILD_MAX_TURNS:-10}"
       AI_MAX_CONCURRENT_JOBS: "${AI_MAX_CONCURRENT_JOBS:-2}"
       MC_VERSION: "${MC_VERSION:-1.21.1}"
       TZ: "${TZ:-UTC}"

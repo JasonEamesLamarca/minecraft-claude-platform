@@ -60,6 +60,35 @@ docker compose logs --since 2m minecraft | grep -q '\[AI\] \[mock\] You asked: o
 grep -q '"event": "request.done"' data/gateway/audit/audit.jsonl
 if grep -q 'optest question' data/gateway/audit/audit.jsonl; then echo "request text leaked into audit log"; exit 1; fi
 
+step "AI build: /ai build -> preview -> /ai approve -> blocks placed -> /ai undo -> area restored (mock plan at spawn)"
+R "ai build a test pillar"
+prev=""
+for _ in $(seq 1 20); do
+  prev="$(docker compose logs --since 2m minecraft | grep -o 'Proposal [0-9a-f]\{6\}: Mock pillar.*' | tail -1)"; [[ -n "$prev" ]] && break; sleep 1
+done
+[[ -n "$prev" ]] || { echo "no build preview"; exit 1; }
+rid="$(echo "$prev" | grep -oE 'Proposal [0-9a-f]{6}' | cut -d' ' -f2)"
+read -r x1 y1 z1 _ y2 _ < <(echo "$prev" | grep -oE 'at -?[0-9]+ -?[0-9]+ -?[0-9]+ \.\. -?[0-9]+ -?[0-9]+ -?[0-9]+' | sed 's/^at //; s/ \.\. / /')
+is_block() { R "execute if block $1 $2 $3 $4 run seed" | grep -q Seed; }
+if is_block "$x1" "$y1" "$z1" minecraft:stone_bricks; then echo "pillar present before approval"; exit 1; fi
+R "ai approve $rid"
+for _ in $(seq 1 20); do is_block "$x1" "$y1" "$z1" minecraft:stone_bricks && break; sleep 1; done
+is_block "$x1" "$y1" "$z1" minecraft:stone_bricks && is_block "$((x1 + 1))" "$y2" "$((z1 + 1))" minecraft:torch
+is_block "$((x1 + 1))" "$((y1 + 1))" "$((z1 + 1))" minecraft:air          # hollow inside
+test -f "data/minecraft/world/generated/mcai/structures/undo/$rid.nbt"
+R "ai undo $rid"
+for _ in $(seq 1 20); do is_block "$x1" "$y1" "$z1" minecraft:stone_bricks || break; sleep 1; done
+if is_block "$x1" "$y1" "$z1" minecraft:stone_bricks; then echo "undo did not restore the area"; exit 1; fi
+grep -q '"event": "build.rolled_back"' data/gateway/audit/audit.jsonl
+echo "ok: build $rid placed, verified and undone"
+
+step "AI build: the gateway rejects a forbidden block from the AI (mock TNT plan)"
+sleep 21   # per-player rate limit (3/min) for the console identity
+R "ai build MOCK_BAD_BUILD"
+for _ in $(seq 1 20); do docker compose logs --since 1m minecraft | grep -q "plan was rejected: action 0: tnt is not allowed" && break; sleep 1; done
+docker compose logs --since 1m minecraft | grep -q "plan was rejected: action 0: tnt is not allowed"
+echo "ok: forbidden block rejected"
+
 step "isolation: only the game port is published; the AI worker has no host mounts"
 for svc in gateway ai-worker backup; do
   [[ "$(bindings "$svc")" == "{}" ]] || { echo "$svc publishes ports: $(bindings "$svc")"; exit 1; }

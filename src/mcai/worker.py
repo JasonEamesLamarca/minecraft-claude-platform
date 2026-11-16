@@ -36,6 +36,8 @@ def make_provider() -> Provider:
         return NoneProvider()
     return ClaudeCodeProvider(method, credential, model=os.environ.get("AI_MODEL", "").strip(),
                               max_request_usd=env_float("AI_MAX_REQUEST_USD", 0.25, 0.01, 50.0),
+                              max_build_usd=env_float("AI_MAX_BUILD_USD", 1.0, 0.01, 50.0),
+                              build_max_turns=env_int("AI_BUILD_MAX_TURNS", 10, 2, 50),
                               mc_version=os.environ.get("MC_VERSION", "1.21.1"))
 
 
@@ -74,7 +76,7 @@ def work_loop(api: GatewayAPI, provider: Provider, stop: threading.Event, wait: 
         rid = job["request_id"]
         t0 = time.monotonic()
         try:
-            result = provider.answer(job).as_dict()
+            result = provider.run(job).as_dict()
         except Exception:
             log.exception("provider crashed on %s", rid)
             result = {"ok": False, "error": "provider crashed", "error_code": "provider_error", "provider": provider.name}

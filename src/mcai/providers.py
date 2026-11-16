@@ -6,9 +6,11 @@ import logging
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+import sys
+import tempfile
+from dataclasses import dataclass, field
 
-from .prompt import build_system_prompt, build_user_prompt
+from .prompt import build_builder_prompt, build_system_prompt, build_user_prompt
 
 log = logging.getLogger("mcai.provider")
 
@@ -23,6 +25,7 @@ class ProviderResult:
     input_tokens: int = 0
     output_tokens: int = 0
     provider: str = ""
+    plan: dict | None = field(default=None)
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
@@ -34,6 +37,12 @@ class Provider:
     def answer(self, job: dict) -> ProviderResult:
         raise NotImplementedError
 
+    def build(self, job: dict) -> ProviderResult:
+        raise NotImplementedError
+
+    def run(self, job: dict) -> ProviderResult:
+        return self.build(job) if job.get("kind") == "build" else self.answer(job)
+
 
 class NoneProvider(Provider):
     """Used when no AI credential is configured: answers every request with a 'not configured' error."""
@@ -41,6 +50,8 @@ class NoneProvider(Provider):
 
     def answer(self, job: dict) -> ProviderResult:
         return ProviderResult(False, error="no AI credential configured", error_code="not_configured", provider=self.name)
+
+    build = answer
 
 
 class MockProvider(Provider):
@@ -54,6 +65,18 @@ class MockProvider(Provider):
         prompt = build_user_prompt(job.get("player_name", "Player"), text, job.get("context"))
         return ProviderResult(True, text=f"[mock] You asked: {text}", cost_usd=0.0,
                               input_tokens=len(prompt) // 4, output_tokens=10, provider=self.name)
+
+    def build(self, job: dict) -> ProviderResult:
+        """A fixed small pillar 2 blocks east/south of the origin, or a forbidden block for MOCK_BAD_BUILD."""
+        ox, oy, oz = job["build"]["origin"]
+        if "MOCK_BAD_BUILD" in job.get("text", ""):
+            plan = {"title": "Bad", "actions": [{"op": "setblock", "pos": [ox + 2, oy, oz + 2], "block": "minecraft:tnt"}]}
+        else:
+            plan = {"title": "Mock pillar", "actions": [
+                {"op": "fill", "from": [ox + 2, oy, oz + 2], "to": [ox + 4, oy + 3, oz + 4],
+                 "block": "minecraft:stone_bricks", "mode": "hollow"},
+                {"op": "setblock", "pos": [ox + 3, oy + 4, oz + 3], "block": "minecraft:torch"}]}
+        return ProviderResult(True, text="[mock] A small stone pillar with a torch.", plan=plan, provider=self.name)
 
 
 class ClaudeCodeProvider(Provider):
@@ -70,7 +93,8 @@ class ClaudeCodeProvider(Provider):
     name = "claude-code"
 
     def __init__(self, auth_method: str, credential: str, model: str = "", max_request_usd: float = 0.25,
-                 binary: str | None = None, mc_version: str = "1.21.1"):
+                 binary: str | None = None, mc_version: str = "1.21.1", max_build_usd: float = 1.0,
+                 build_max_turns: int = 10):
         if auth_method not in ("api-key", "subscription"):
             raise ValueError("auth_method must be api-key or subscription")
         self.auth_method = auth_method
@@ -79,6 +103,9 @@ class ClaudeCodeProvider(Provider):
         self.max_request_usd = max_request_usd
         self.binary = binary or shutil.which("claude") or "claude"
         self.system_prompt = build_system_prompt(mc_version)
+        self.builder_prompt = build_builder_prompt(mc_version)
+        self.max_build_usd = max_build_usd
+        self.build_max_turns = build_max_turns
 
     def command(self) -> list[str]:
         cmd = [self.binary, "-p", "--output-format", "json", "--tools", "",
@@ -99,11 +126,54 @@ class ClaudeCodeProvider(Provider):
             env["CLAUDE_CODE_OAUTH_TOKEN"] = self.credential
         return env
 
+    def build_command(self, mcp_config: str) -> list[str]:
+        """Builds: still no built-in tools; the only tools are the two plan tools of the mcai MCP server."""
+        cmd = [self.binary, "-p", "--output-format", "json", "--tools", "",
+               "--strict-mcp-config", "--mcp-config", mcp_config,
+               "--allowedTools", "mcp__mcai__validate_plan,mcp__mcai__propose_build",
+               "--max-turns", str(self.build_max_turns), "--max-budget-usd", f"{self.max_build_usd:.2f}",
+               "--no-session-persistence", "--system-prompt", self.builder_prompt]
+        if self.model:
+            cmd += ["--model", self.model]
+        return cmd
+
+    @staticmethod
+    def mcp_config(context: dict, proposal_file: str) -> str:
+        return json.dumps({"mcpServers": {"mcai": {
+            "type": "stdio", "command": sys.executable, "args": ["-m", "mcai.mcp_build"],
+            "env": {"PYTHONPATH": os.environ.get("PYTHONPATH", "/app"), "MCAI_BUILD_CONTEXT": json.dumps(context),
+                    "MCAI_PROPOSAL_FILE": proposal_file}}}})
+
+    def build(self, job: dict) -> ProviderResult:
+        tmpdir = os.environ.get("TMPDIR", "/tmp")
+        fd, proposal = tempfile.mkstemp(prefix="proposal-", suffix=".json", dir=tmpdir)
+        os.close(fd)
+        try:
+            prompt = build_user_prompt(job.get("player_name", "Player"), job.get("text", ""), job.get("context"))
+            result = self._run(self.build_command(self.mcp_config(job["build"], proposal)), prompt, job)
+            if not result.ok:
+                return result
+            try:
+                with open(proposal, encoding="utf-8") as f:
+                    result.plan = json.load(f)
+            except (OSError, ValueError):
+                result.plan = None
+            if not result.plan:
+                return ProviderResult(False, error="no plan proposed", error_code="no_plan", cost_usd=result.cost_usd,
+                                      input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+                                      provider=self.name, text=result.text)
+            return result
+        finally:
+            os.unlink(proposal)
+
     def answer(self, job: dict) -> ProviderResult:
         prompt = build_user_prompt(job.get("player_name", "Player"), job.get("text", ""), job.get("context"))
+        return self._run(self.command(), prompt, job)
+
+    def _run(self, cmd: list[str], prompt: str, job: dict) -> ProviderResult:
         timeout = max(10, int(job.get("timeout_s", 180)) - 10)
         try:
-            proc = subprocess.run(self.command(), input=prompt, capture_output=True, text=True, timeout=timeout,
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout,
                                   env=self.environment(), cwd=os.environ.get("TMPDIR", "/tmp"))
         except subprocess.TimeoutExpired:
             return ProviderResult(False, error="claude timed out", error_code="timeout", provider=self.name)

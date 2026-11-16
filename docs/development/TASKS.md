@@ -41,11 +41,20 @@ evidence named. Unverified items say so.
 | `/ai ask` + `/ai status` by a player in game | ✅ | Maintainer, vanilla 1.21.1 client, 17 Nov 2026 |
 | `/ai status` over RCON shows nothing (async reply after RCON returns) | ⚠️ | Known limitation; works for players |
 
-## Phase 3 — Build actions ⏳
-Action schema v1, executor (stepped forceload, batching), preview/approve, snapshot/rollback, security tests.
+## Phase 3 — Build actions ✅ (in-game player test pending)
+| Task | Status | Evidence |
+| --- | --- | --- |
+| Action schema v1 + validator (denied blocks, no NBT/namespaces, bounds, size, budget, distance, protected areas, fail-closed) | ✅ | `test_plan.py` (52 tests) |
+| MCP tool server (stdio) with `validate_plan` / `propose_build`; Claude runs with no built-in tools | ✅ | MCP tests in `test_plan.py`; real Claude design via console: 9x6x9 oak cabin, 398 blocks, 11 s, $0.029 (17 Nov 2026) |
+| Gateway: build requests, re-validation, preview, approve/cancel/undo/history, expiry, rights checks, restart safety | ✅ | `test_build_flow.py` (19 tests) |
+| Mod: `/ai build|approve|cancel|undo|history`, block-state check at preview, particle outline, per-tick placement, structure snapshot + undo | ✅ | 12 JUnit tests; console lifecycle on the laptop (build → verify blocks → undo → verify restored) |
+| Old mod jars removed on upgrade (`REMOVE_OLD_MODS_INCLUDE=mcai-fabric-*.jar`) | ✅ | 0.2.0 → 0.3.0 upgrade on the laptop |
+| Operational test: build lifecycle + forbidden-block rejection | ✅ | Local run 17 Nov 2026 |
+| In-game build by the owner (preview outline, approve, undo) | ⏳ | **Needs maintainer** |
 
 ## Phase 4 — Management, RBAC, audit ⏳
-Management API, roles, UUID identities, audit log, SSH gateway, `mcai` CLI, TUI port.
+Management API, roles (incl. builder role replacing the op-level check), UUID identities, audit log, SSH gateway,
+`mcai` CLI, TUI port, pruning of undo snapshots.
 
 ## Phase 5 — Automation engine ⏳
 ## Phase 6 — Atlantis (original; Lite + Full; examples CLI) ⏳

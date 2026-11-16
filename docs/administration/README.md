@@ -108,8 +108,42 @@ Apply changes with `docker compose up -d`.
 stored in `secrets/ai_credential` (mode 600) and only the `ai-worker` container can read it. Then run
 `docker compose up -d ai-worker`. Rotating it works the same way.
 
-**What the AI can do in this version:** answer questions in text, nothing else. It has no tools: no commands, no
-world changes, no files, no web access.
+**What the AI can do in this version:** answer questions, and *design* builds that only happen after someone
+approves them (below). It has no other tools: no commands, no files, no web access.
+
+### Building with the AI
+
+```
+/ai build a small stone watchtower with a ladder, 3 blocks in front of me
+```
+
+1. Claude designs the build. This usually takes 10-60 s, and you can keep playing.
+2. You get a **preview**: title, size, coordinates, block count and materials. White particles outline the
+   area for 30 s; only you can see them.
+3. `/ai approve` (or `/ai approve <id>`) builds it, a batch of blocks per tick. `/ai cancel` drops the proposal.
+   Proposals expire after 15 minutes.
+4. `/ai undo` (or `/ai undo <id>`) puts the area back exactly as it was before the build.
+
+`/ai history` lists your last 5 requests with their ids and states.
+
+**Who can build:** players with permission level `AI_BUILD_MIN_OP_LEVEL` (default 4). The ops list is reset to
+the owner at every start, so by default that's the owner and the server console. To let a trusted builder use it
+temporarily, lower the level or give them op. Proper roles arrive in Phase 4.
+
+**Limits** (`.env`, defaults): 40,000 blocks, a 48×64×48 box, within 64 blocks of the player, and $1.00 per
+design. TNT, command blocks, lava, fire, bedrock, spawners, portals and similar blocks are always refused.
+
+**Protected areas:** create `data/gateway/protected-areas.json` to keep the AI away from places such as spawn or
+someone's base:
+
+```json
+[{"name": "spawn", "dimension": "minecraft:overworld", "from": [-50, -64, -50], "to": [50, 319, 50]}]
+```
+
+The gateway reads it for every build. If the file has a syntax error, every build is refused until it is fixed.
+
+**Undo snapshots** are stored in `data/minecraft/world/generated/mcai/structures/undo/<id>.nbt`. They are part of
+the world, so backups include them.
 
 **Where to look:**
 - `docker compose logs ai-worker`: one JSON line per job, with outcome, cost and duration. The question text

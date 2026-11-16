@@ -6,6 +6,11 @@ and the project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor 
 ## [Unreleased]
 
 ### Added
+- Phase 3: `/ai build <description>` → Claude designs a plan with two MCP tools (no other tools) → gateway
+  re-validates (denied blocks, no NBT, size/budget/distance limits, protected areas) → preview with particle
+  outline → `/ai approve` → the mod places blocks per tick after saving a structure snapshot → `/ai undo`
+  restores it. Also `/ai cancel` and `/ai history`. ADR-0009. Old platform-mod jars are removed on upgrade.
+- Tests: 160 Python tests, 12 mod tests; operational test covers the build lifecycle and a rejected TNT plan.
 - Phase 2: server-side Fabric mod `mcai` (`/ai help|ask|status`), integration gateway (Python stdlib; separate
   mod/worker tokens, rate/pending/queue/daily-budget limits, timeouts, audit log), AI worker running Claude Code
   2.1.316 with no tools and per-request budget/turn caps, plus a mock provider for CI. Single `secrets/ai_credential`

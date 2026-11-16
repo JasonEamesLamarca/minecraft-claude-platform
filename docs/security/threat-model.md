@@ -1,4 +1,4 @@
-# Threat model (v1, Phase 2)
+# Threat model (v2, Phase 3)
 
 STRIDE-style model of the architecture. **Status** says what is implemented and tested, and what is still planned.
 The model is reviewed at every phase gate.
@@ -61,7 +61,7 @@ actions).
 | # | Status | Tests |
 | --- | --- | --- |
 | T1 | **Implemented for questions.** Claude runs with no tools at all (`--tools ""`, empty strict MCP config, 1 turn). Player text is cleaned and placed in a randomized delimiter. Replies are cleaned and shown as literal text, never parsed as commands | `test_ai_core.py` (command flags, delimiter, sanitizing), `test_gateway_flow.py::test_model_reply_sanitized_before_delivery` |
-| T2 | Planned (Phase 3) | — |
+| T2 | **Implemented:** plans are data only (no NBT, commands or other namespaces), with a denied-block list, size, budget, distance and protected-area checks in the worker *and* the gateway. The mod re-parses blocks with NBT disabled. Builds need explicit approval from the requester or an admin, proposals expire, the area is snapshotted before building, and undo restores it. A broken protected-areas file blocks all builds (fail closed) | `test_plan.py` (52 tests incl. injection strings), `test_build_flow.py` (19 tests: approval rights, forged levels, expiry, worker bypass, restart), mod `PlanCursorTest`, operational test (build → verify → undo, TNT plan rejected) |
 | T3 | **Implemented:** per-player rate limit, one pending request per player, queue cap, per-request `--max-budget-usd`, daily USD budget, timeouts | `test_rate_limit`, `test_one_pending_request_per_player`, `test_daily_budget`, `test_timeout_and_late_result_not_delivered` |
 | T4 | **Implemented:** the credential is a secret mounted only into ai-worker and passed only in the `claude` child process environment. It is never in argv, logs or `.env` | `test_ai_credential_only_in_worker`, `test_claude_credential_only_in_child_env`, `test_api_key_goes_to_secret_file_not_env` |
 | T5 | **Implemented:** separate mod and worker tokens, constant-time compare, failed attempts audited, internal network only | `test_mod_api_rejects_bad_or_worker_token`, `test_worker_api_rejects_mod_token` |
@@ -75,3 +75,10 @@ New residual risks (Phase 2):
 - Prompt injection can still change *what text* the model answers, within the length limit. It can't make the
   platform do anything else.
 - Subscription-token use carries terms-of-service risk for the server owner (ADR-0003).
+
+New residual risks (Phase 3):
+- An approved build replaces whatever is inside its bounding box, including other players' blocks. The approver
+  sees the box (outline and coordinates) before approving, and undo restores it. Protected areas exclude
+  important places.
+- Undo snapshots are as sensitive as the world itself (they include container contents) and are stored in it.
+- Interim authorization relies on vanilla op levels until RBAC (Phase 4).

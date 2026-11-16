@@ -45,6 +45,14 @@ class GatewaySettings:
     daily_budget_usd: float
     request_timeout_s: int
     audit_log_text: bool
+    build_min_op_level: int = 4
+    build_timeout_s: int = 420
+    approve_ttl_s: int = 900
+    exec_timeout_s: int = 600
+    build_max_blocks: int = 40_000
+    build_max_size: tuple = (48, 64, 48)
+    build_max_distance: int = 64
+    build_max_actions: int = 2000
 
     @classmethod
     def from_env(cls) -> "GatewaySettings":
@@ -62,6 +70,15 @@ class GatewaySettings:
             daily_budget_usd=env_float("AI_DAILY_BUDGET_USD", 2.0, 0.0, 10000.0),
             request_timeout_s=env_int("AI_REQUEST_TIMEOUT_SECONDS", 180, 10, 3600),
             audit_log_text=os.environ.get("AUDIT_LOG_TEXT", "false").strip().lower() == "true",
+            build_min_op_level=env_int("AI_BUILD_MIN_OP_LEVEL", 4, 0, 5),
+            build_timeout_s=env_int("AI_BUILD_TIMEOUT_SECONDS", 420, 30, 3600),
+            approve_ttl_s=env_int("AI_APPROVE_TTL_SECONDS", 900, 30, 86400),
+            exec_timeout_s=env_int("AI_EXEC_TIMEOUT_SECONDS", 600, 30, 7200),
+            build_max_blocks=env_int("AI_BUILD_MAX_BLOCKS", 40_000, 1, 1_000_000),
+            build_max_size=(env_int("AI_BUILD_MAX_X", 48, 1, 256), env_int("AI_BUILD_MAX_Y", 64, 1, 384),
+                            env_int("AI_BUILD_MAX_Z", 48, 1, 256)),
+            build_max_distance=env_int("AI_BUILD_MAX_DISTANCE", 64, 1, 512),
+            build_max_actions=env_int("AI_BUILD_MAX_ACTIONS", 2000, 1, 20_000),
         )
 
 
