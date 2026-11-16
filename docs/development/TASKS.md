@@ -27,7 +27,7 @@ evidence named. Unverified items say so.
 | Multi-world, world import/export | ⏳ | Moved to Phase 4 (`mcai` world commands) |
 | Docker Desktop macOS/Windows, native ARM64 | ⚠️ | Unverified (no hardware); images are multi-arch |
 
-## Phase 2 — Working core 🔄 (real-Claude test pending)
+## Phase 2 — Working core ✅
 | Task | Status | Evidence |
 | --- | --- | --- |
 | ADR-0003 verified against Claude Code docs; terms notice for subscription tokens | ✅ | ADR-0003 "Verification" section |
@@ -36,8 +36,9 @@ evidence named. Unverified items say so.
 | AI worker: mock + Claude Code (2.1.316, no tools, budget/turn caps), credential only in child env | ✅ | 17 unit tests (`test_ai_core.py`) with a fake `claude` binary |
 | Compose: gateway (internal only), ai-worker (internal + egress, no host mounts) | ✅ | `test_compose_security.py`; operational test isolation checks |
 | End-to-end `/ai ask` with the mock provider (console → mod → gateway → worker → mod) | ✅ | Operational test, local run 16 Nov 2026 |
-| `/ai ask` with real Claude | ⏳ | **Needs the maintainer's credential** (`scripts/setup.sh`) |
-| `/ai ask` by a player in game | ⏳ | **Needs maintainer** at the client |
+| `/ai ask` with real Claude | ✅ | Claude Code 2.1.316, subscription token: answers in 2-4 s, ~$0.004 estimated per question (16 Nov 2026) |
+| Prompt-injection attempts against real Claude (op request, fake closing tag + "use Bash", system-prompt extraction, item/teleport request) | ✅ | All refused in text; `ops.json` unchanged; no tools available to the model |
+| `/ai ask` + `/ai status` by a player in game | ✅ | Maintainer, vanilla 1.21.1 client, 17 Nov 2026 |
 | `/ai status` over RCON shows nothing (async reply after RCON returns) | ⚠️ | Known limitation; works for players |
 
 ## Phase 3 — Build actions ⏳
