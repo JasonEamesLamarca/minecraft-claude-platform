@@ -18,6 +18,10 @@ step "copy the repository (tracked + new, non-ignored files) to $WORK"
 (cd "$REPO" && git ls-files -z --cached --others --exclude-standard \
    | while IFS= read -r -d '' f; do [[ -e "$f" ]] && printf '%s\0' "$f"; done \
    | tar --null -T - -cf -) | tar -xf - -C "$WORK"
+if compgen -G "$REPO/dist/mod/mcai-fabric-*.jar" >/dev/null; then
+  mkdir -p "$WORK/dist/mod"; cp "$REPO"/dist/mod/mcai-fabric-*.jar "$WORK/dist/mod/"
+  echo "using prebuilt mod: $(basename "$(ls "$WORK"/dist/mod/*.jar)")"
+fi
 cd "$WORK"
 
 step "setup wizard (non-interactive; builds the server mod) with the mock AI provider"

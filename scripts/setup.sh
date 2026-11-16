@@ -191,7 +191,12 @@ if ! compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null; then
     warn "No mod jar in dist/mod and MCAI_SKIP_MOD_BUILD=1: /ai commands will be missing."
   else
     info "Building the server mod (first time only; downloads Gradle dependencies, a few minutes)..."
-    "$ROOT/scripts/build-mod.sh" >/dev/null || die "Mod build failed: run scripts/build-mod.sh to see why."
+    buildlog="$(mktemp)"
+    if ! "$ROOT/scripts/build-mod.sh" >"$buildlog" 2>&1; then
+      tail -n 40 "$buildlog" >&2; rm -f "$buildlog"
+      die "Mod build failed (last lines above). Network errors such as HTTP 429 are temporary: re-run in a few minutes."
+    fi
+    rm -f "$buildlog"
   fi
 fi
 compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null && ok "Server mod: $(basename "$(ls "$ROOT"/dist/mod/mcai-fabric-*.jar | head -1)")"
