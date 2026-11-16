@@ -1,0 +1,59 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+!*.pub.example
+.rcon-password
+claude.env
+**/claude-config/
+**/.claude/
+
+# --- Runtime state, worlds, user data ---
+data/
+world*/
+backups/
+*.tgz
+*.mca
+logs/
+*.log
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+usercache.json
+whitelist.json
+ops.json
+banned-*.json
+
+# --- Large/generated assets (published as release assets) ---
+examples/*/schematics/*.schem
+examples/*/schematics/*.nbt
+dist/
+out/
+
+# --- Build outputs ---
+build/
+.gradle/
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+node_modules/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

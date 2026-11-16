@@ -1,0 +1,9 @@
+Minecraft AI Platform
+Copyright 2026 Jason Eames Lamarca and contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository does not include Minecraft server or client software. Minecraft is a
+trademark of Mojang Synergies AB; this project is not affiliated with Mojang or Microsoft.
+Third-party components downloaded at install time remain under their own licenses; see
+docs/development/THIRD_PARTY.md once dependencies are added.
