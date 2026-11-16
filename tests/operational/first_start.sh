@@ -6,6 +6,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="${1:-$(mktemp -d)}"
+mkdir -p "$WORK"
 PORT="${MCAI_TEST_PORT:-25599}"
 OWNER="${MCAI_TEST_OWNER:-Notch}"   # any real Java account name: the image resolves it to a UUID for the whitelist
 export COMPOSE_PROJECT_NAME="mcai-optest"
