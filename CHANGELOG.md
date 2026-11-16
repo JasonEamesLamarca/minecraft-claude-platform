@@ -6,6 +6,12 @@ and the project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor 
 ## [Unreleased]
 
 ### Added
+- Phase 2: server-side Fabric mod `mcai` (`/ai help|ask|status`), integration gateway (Python stdlib; separate
+  mod/worker tokens, rate/pending/queue/daily-budget limits, timeouts, audit log), AI worker running Claude Code
+  2.1.316 with no tools and per-request budget/turn caps, plus a mock provider for CI. Single `secrets/ai_credential`
+  with a terms notice for subscription tokens. ADR-0008. Structured JSON logs.
+- Tests: 83 Python tests (unit + gateway/worker integration with mock AI), 7 mod tests, operational test now covers
+  the `/ai` round trip and container isolation. CI jobs for the mod build and service images.
 - Phase 1: `compose.yaml` with a hardened Fabric server (itzg/minecraft-server, pinned by digest, non-root,
   read-only root filesystem, all capabilities dropped, internal-only RCON via Docker secret, whitelist and
   online-mode on) and scheduled backups (itzg/mc-backup).

@@ -130,20 +130,28 @@ ok "Owner $OWNER, port $PORT, heap $MEMORY (container limit $(env_get MC_MEM_LIM
 
 # ---------- 5. internal secrets ----------
 info ""; info "${c_bld}Secrets${c_off}"
-for s in rcon_password gateway_mod_token; do
+for s in rcon_password gateway_mod_token worker_token; do
   if [[ -s "$SECRETS/$s" ]]; then ok "secrets/$s exists (kept)"
   else gen_secret > "$SECRETS/$s"; chmod 600 "$SECRETS/$s"; ok "Generated secrets/$s"; fi
 done
 
 # ---------- 6. AI authentication ----------
-info ""; info "${c_bld}AI authentication${c_off} (used from Phase 2 on; see docs/architecture/adr/0003-ai-authentication.md)"
+info ""; info "${c_bld}AI authentication${c_off} (see docs/architecture/adr/0003-ai-authentication.md)"
+CRED="$SECRETS/ai_credential"
+[[ -f "$CRED" ]] || { : > "$CRED"; chmod 600 "$CRED"; }      # compose needs the file even when AI is off
 current="$(env_get AI_AUTH_METHOD)"
+subscription_notice() {
+  warn "Subscription tokens: Anthropic's Claude Code legal page says subscription (OAuth) login is designed for"
+  warn "\"ordinary use of Claude Code\", that products/services should use API keys, and that requests must not be"
+  warn "routed through Free/Pro/Max/Ultra credentials on behalf of other users. Here the token answers your players'"
+  warn "/ai requests. Read https://code.claude.com/docs/en/legal-and-compliance - you are responsible for your plan's terms."
+}
 if [[ -z "$AI_AUTH" ]]; then
   if $NONINTERACTIVE; then AI_AUTH="${current:-none}"
   else
-    info "  1) Anthropic API key - pay per use; recommended for unattended use"
-    info "  2) Claude subscription token from 'claude setup-token' - you are responsible for your plan's terms"
-    info "  3) Skip for now"
+    info "  1) Anthropic API key (console.anthropic.com) - pay per use; recommended"
+    info "  2) Claude subscription token from 'claude setup-token' - see the terms notice"
+    info "  3) Skip for now (the AI answers 'not set up yet')"
     case "$current" in api-key) def=1 ;; subscription) def=2 ;; *) def=3 ;; esac
     case "$(ask "Choose 1, 2 or 3" "$def")" in
       1) AI_AUTH=api-key ;; 2) AI_AUTH=subscription ;; 3) AI_AUTH=none ;; *) die "Please choose 1, 2 or 3." ;;
@@ -151,11 +159,10 @@ if [[ -z "$AI_AUTH" ]]; then
   fi
 fi
 case "$AI_AUTH" in
-  none) ok "AI authentication skipped" ;;
+  none) : > "$CRED"; ok "AI authentication skipped (no credential stored)" ;;
   api-key|subscription)
-    file="$SECRETS/anthropic_api_key"; prefix="sk-ant-api"
-    [[ "$AI_AUTH" == subscription ]] && { file="$SECRETS/claude_oauth_token"; prefix="sk-ant-oat"; }
-    if [[ -s "$file" && "$AI_AUTH" == "$current" ]] && ! $NONINTERACTIVE; then
+    prefix="sk-ant-api"; [[ "$AI_AUTH" == subscription ]] && { prefix="sk-ant-oat"; subscription_notice; }
+    if [[ -s "$CRED" && "$AI_AUTH" == "$current" ]] && ! $NONINTERACTIVE; then
       [[ "$(ask "A credential is already stored. Replace it? (y/N)" "n")" =~ ^[yY] ]] || { ok "Kept existing credential"; AI_SKIP_READ=1; }
     fi
     if [[ -z "${AI_SKIP_READ:-}" ]]; then
@@ -163,20 +170,31 @@ case "$AI_AUTH" in
       else read -r -s -p "Paste the credential (input hidden): " cred </dev/tty; echo; fi
       [[ -n "${cred:-}" ]] || die "No credential provided."
       [[ "$cred" == "$prefix"* ]] || warn "That doesn't look like a $AI_AUTH credential (expected it to start with $prefix). Stored anyway."
-      printf '%s' "$cred" > "$file"; chmod 600 "$file"; unset cred
-      # only one method is active: remove the other credential
-      if [[ "$AI_AUTH" == api-key ]]; then rm -f "$SECRETS/claude_oauth_token"; else rm -f "$SECRETS/anthropic_api_key"; fi
-      ok "Stored in ${file#"$ROOT"/} (mode 600, git-ignored)"
+      printf '%s' "$cred" > "$CRED"; chmod 600 "$CRED"; unset cred
+      ok "Stored in secrets/ai_credential (mode 600, git-ignored; only the ai-worker container can read it)"
     fi ;;
   *) die "--ai-auth must be none, api-key or subscription" ;;
 esac
+# credentials from older versions of this wizard
+for old in anthropic_api_key claude_oauth_token; do
+  [[ -f "$SECRETS/$old" ]] && { rm -f "$SECRETS/$old"; ok "Removed old secrets/$old"; }
+done
 env_set AI_AUTH_METHOD "$AI_AUTH"
 
 # ---------- 7. SSH administration ----------
 info ""; info "${c_bld}SSH administration${c_off}: not available yet (arrives in Phase 4)."
 
-# ---------- 8. validate ----------
-mkdir -p "$ROOT/data/minecraft" "$ROOT/backups"
+# ---------- 8. server mod + validate ----------
+mkdir -p "$ROOT/data/minecraft" "$ROOT/data/gateway" "$ROOT/backups" "$ROOT/dist/mod"
+if ! compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null; then
+  if [[ "${MCAI_SKIP_MOD_BUILD:-}" == 1 ]]; then
+    warn "No mod jar in dist/mod and MCAI_SKIP_MOD_BUILD=1: /ai commands will be missing."
+  else
+    info "Building the server mod (first time only; downloads Gradle dependencies, a few minutes)..."
+    "$ROOT/scripts/build-mod.sh" >/dev/null || die "Mod build failed: run scripts/build-mod.sh to see why."
+  fi
+fi
+compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null && ok "Server mod: $(basename "$(ls "$ROOT"/dist/mod/mcai-fabric-*.jar | head -1)")"
 (cd "$ROOT" && docker compose config --quiet) || die "docker compose config failed - see the error above."
 ok "compose.yaml validates with your settings"
 if grep -qE '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)=.+' "$ENV_FILE"; then
@@ -189,7 +207,7 @@ if ! $START && ! $NONINTERACTIVE; then
 fi
 if $START; then
   info ""; info "${c_bld}Starting${c_off} (first start downloads Minecraft + mods; this can take several minutes)"
-  (cd "$ROOT" && docker compose up -d)
+  (cd "$ROOT" && docker compose up -d --build)
   "$ROOT/scripts/wait-healthy.sh" minecraft 900
   ok "Minecraft is up. Connect your Minecraft Java $(env_get MC_VERSION) client to <this-host>:$PORT"
 else

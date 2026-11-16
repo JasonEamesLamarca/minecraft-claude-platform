@@ -18,7 +18,12 @@ def services(config):
 
 def test_images_pinned_by_digest(config):
     for name, svc in services(config):
-        assert re.search(r":[\w.\-]+@sha256:[0-9a-f]{64}$", svc["image"]), f"{name} image not pinned: {svc['image']}"
+        if "build" in svc:          # built locally: its base image must be pinned instead
+            dockerfile = REPO / svc["build"]["dockerfile"]
+            froms = [l for l in dockerfile.read_text().splitlines() if l.startswith("FROM ")]
+            assert froms and all(re.search(r"@sha256:[0-9a-f]{64}", l) for l in froms), f"{name}: unpinned base image"
+        else:
+            assert re.search(r":[\w.\-]+@sha256:[0-9a-f]{64}$", svc["image"]), f"{name} image not pinned: {svc['image']}"
 
 
 def test_hardening_on_every_service(config):
@@ -83,3 +88,33 @@ def test_ops_reset_to_owner_whitelist_merged(config):
     env = config["services"]["minecraft"]["environment"]
     assert env["EXISTING_OPS_FILE"] == "SYNCHRONIZE"     # in-game op grants do not persist
     assert env["EXISTING_WHITELIST_FILE"] == "MERGE"     # whitelisted friends survive restarts
+
+
+def test_ai_credential_only_in_worker(config):
+    for name, svc in services(config):
+        secrets = {x["source"] for x in svc.get("secrets", [])}
+        if name == "ai-worker":
+            assert secrets == {"ai_credential", "worker_token"}
+        else:
+            assert "ai_credential" not in secrets, f"{name} must not get the AI credential"
+
+
+def test_worker_has_no_volumes_and_gateway_no_internet(config):
+    worker = config["services"]["ai-worker"]
+    assert not [v for v in worker.get("volumes", []) if v.get("type") != "tmpfs"], "AI worker must not mount host data"
+    assert worker.get("read_only") is True
+    assert set(config["services"]["gateway"]["networks"]) == {"internal"}
+    assert set(worker["networks"]) == {"internal", "ai-egress"}
+
+
+def test_worker_token_and_mod_token_separated(config):
+    def sec(name):
+        return {x["source"] for x in config["services"][name].get("secrets", [])}
+    assert "worker_token" not in sec("minecraft")
+    assert "gateway_mod_token" not in sec("ai-worker")
+
+
+def test_claude_code_version_pinned():
+    text = (REPO / "containers/claude/Dockerfile").read_text()
+    assert re.search(r"ARG CLAUDE_CODE_VERSION=\d+\.\d+\.\d+", text)
+    assert "DISABLE_AUTOUPDATER=1" in text

@@ -1,7 +1,7 @@
 # Installation
 
-> Phase 1 status: this installs the **Minecraft server with backups**. The AI, automation and SSH console
-> arrive in later phases. Everything below was run on the "verified" setup in the table, unless marked otherwise.
+> Phase 2 status: this installs the **Minecraft server with backups and the `/ai ask` assistant**. Automations,
+> the SSH console and AI-assisted building arrive in later phases. Everything below was run on the "verified" setup in the table, unless marked otherwise.
 
 ## Supported hosts
 
@@ -49,10 +49,15 @@ It will:
 4. Ask for the game port (default 25565) and the Java heap size (e.g. `4G`). The container memory limit is set to
    about 1.5× the heap.
 5. Generate random internal secrets in `secrets/` (mode 600), such as the RCON password.
-6. Ask how Claude should authenticate: an API key, a subscription token, or skip for now. The credential is stored in
-   `secrets/`, never in `.env`. It is used from Phase 2 on; see
-   [ADR-0003](../architecture/adr/0003-ai-authentication.md).
-7. Validate `compose.yaml` with your settings, and offer to start the server.
+6. Ask how Claude should authenticate:
+   - an **Anthropic API key** from <https://console.anthropic.com> (pay per use; recommended),
+   - a **subscription token** from `claude setup-token`. Read the terms notice the wizard shows, and
+     [ADR-0003](../architecture/adr/0003-ai-authentication.md),
+   - or **skip**: `/ai` then replies that the AI isn't set up.
+
+   The credential goes to `secrets/ai_credential`, never `.env`, and only the AI worker container can read it.
+7. Build the server mod in a container on first run (no Java needed; a few minutes). Then validate
+   `compose.yaml` and offer to start everything.
 
 `.env` and `secrets/` are git-ignored. Re-running the wizard keeps your existing secrets and settings.
 
@@ -70,7 +75,11 @@ scripts/wait-healthy.sh minecraft 900
 scripts/doctor.sh             # prerequisites, config, health, resource use, recent errors
 ```
 
-The first start downloads Minecraft, the Fabric loader and Fabric API, which takes a few minutes.
+The first start downloads Minecraft, the Fabric loader and Fabric API, and builds the gateway and AI worker
+images. This takes a few minutes. Four services run: `minecraft`, `backup`, `gateway` and `ai-worker`.
+
+**Test the AI:** in game, type `/ai ask how do I make a torch?`. Without a credential, set `AI_PROVIDER=mock` in
+`.env` and run `docker compose up -d` to get canned answers.
 
 ## 5. Connect
 

@@ -1,7 +1,8 @@
 # Minecraft AI Platform
 
-> **Status: pre-alpha, Phase 1.** What works today is a hardened Fabric Minecraft server with automatic backups,
-> restore and a setup wizard: see [installation](docs/installation/README.md). The AI integration, automations, SSH
+> **Status: pre-alpha, Phase 2.** What works today: a hardened Fabric server with backups, restore and a setup
+> wizard, plus **`/ai ask`**. Players ask questions in chat and Claude answers. Claude has no tools and runs under
+> budget and rate limits. See [installation](docs/installation/README.md). AI-assisted building, automations, the SSH
 > console and Atlantis are still being built. [`docs/development/TASKS.md`](docs/development/TASKS.md) tracks what
 > actually works.
 

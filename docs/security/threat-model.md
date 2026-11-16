@@ -1,7 +1,7 @@
-# Threat model (v0, Phase 0)
+# Threat model (v1, Phase 2)
 
-STRIDE-style model of the planned architecture. Each mitigation will link to its tests once they exist. The model
-is reviewed at every phase gate.
+STRIDE-style model of the architecture. **Status** says what is implemented and tested, and what is still planned.
+The model is reviewed at every phase gate.
 
 ## Assets
 
@@ -55,3 +55,23 @@ actions).
 - A public game port is attackable through Minecraft server vulnerabilities themselves. Keep the image updated.
 - The model may still produce unhelpful or odd-but-allowed actions within a player's budget and permissions.
 - Host compromise exposes all secrets on it.
+
+## Implementation status (Phase 2)
+
+| # | Status | Tests |
+| --- | --- | --- |
+| T1 | **Implemented for questions.** Claude runs with no tools at all (`--tools ""`, empty strict MCP config, 1 turn). Player text is cleaned and placed in a randomized delimiter. Replies are cleaned and shown as literal text, never parsed as commands | `test_ai_core.py` (command flags, delimiter, sanitizing), `test_gateway_flow.py::test_model_reply_sanitized_before_delivery` |
+| T2 | Planned (Phase 3) | — |
+| T3 | **Implemented:** per-player rate limit, one pending request per player, queue cap, per-request `--max-budget-usd`, daily USD budget, timeouts | `test_rate_limit`, `test_one_pending_request_per_player`, `test_daily_budget`, `test_timeout_and_late_result_not_delivered` |
+| T4 | **Implemented:** the credential is a secret mounted only into ai-worker and passed only in the `claude` child process environment. It is never in argv, logs or `.env` | `test_ai_credential_only_in_worker`, `test_claude_credential_only_in_child_env`, `test_api_key_goes_to_secret_file_not_env` |
+| T5 | **Implemented:** separate mod and worker tokens, constant-time compare, failed attempts audited, internal network only | `test_mod_api_rejects_bad_or_worker_token`, `test_worker_api_rejects_mod_token` |
+| T6 | Implemented: online-mode + whitelist, and the gateway accepts UUIDs only | Phase 1 tests, `test_malformed_requests_rejected` |
+| T12 | Implemented (Phase 1) | `test_only_game_port_published`, operational test |
+| T14 | **Implemented:** audit records store request length + hash, not text (`AUDIT_LOG_TEXT=false`). Structured JSON logs carry no secrets | `test_audit_log_has_no_request_text_by_default` |
+
+New residual risks (Phase 2):
+- The AI worker has general outbound internet access, not only Anthropic's API. An allowlisting egress proxy is
+  planned for Phase 7.
+- Prompt injection can still change *what text* the model answers, within the length limit. It can't make the
+  platform do anything else.
+- Subscription-token use carries terms-of-service risk for the server owner (ADR-0003).

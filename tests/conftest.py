@@ -22,6 +22,7 @@ def workdir(tmp_path: Path) -> Path:
 def run_setup(workdir: Path, *args: str, stdin: str = "") -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("MC_", "AI_", "ANTHROPIC", "CLAUDE"))}
     env["COMPOSE_PROJECT_NAME"] = "mcai-test"
+    env["MCAI_SKIP_MOD_BUILD"] = "1"
     return subprocess.run(
         ["bash", str(workdir / "scripts" / "setup.sh"), "--non-interactive", *args],
         input=stdin, capture_output=True, text=True, env=env, cwd=workdir, timeout=120,

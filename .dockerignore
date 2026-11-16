@@ -1,0 +1,3 @@
+*
+!src/mcai/**
+src/mcai/**/__pycache__

@@ -14,21 +14,53 @@ step() { printf '\n### %s\n' "$*"; }
 cleanup() { (cd "$WORK" && docker compose down --timeout 60 >/dev/null 2>&1) || true; }
 trap cleanup EXIT
 
-step "copy deployment files to $WORK"
-cp "$REPO/compose.yaml" "$REPO/.env.example" "$WORK/"; cp -r "$REPO/scripts" "$WORK/"
+step "copy the repository (tracked + new, non-ignored files) to $WORK"
+(cd "$REPO" && git ls-files -z --cached --others --exclude-standard \
+   | while IFS= read -r -d '' f; do [[ -e "$f" ]] && printf '%s\0' "$f"; done \
+   | tar --null -T - -cf -) | tar -xf - -C "$WORK"
 cd "$WORK"
 
-step "setup wizard (non-interactive) + first start"
-scripts/setup.sh --non-interactive --accept-eula --owner "$OWNER" --port "$PORT" --memory 1G --ai-auth none --start
+step "setup wizard (non-interactive; builds the server mod) with the mock AI provider"
+scripts/setup.sh --non-interactive --accept-eula --owner "$OWNER" --port "$PORT" --memory 1G --ai-auth none
+sed -i.bak 's/^AI_PROVIDER=.*/AI_PROVIDER=mock/' .env && rm -f .env.bak
+docker compose up -d --build
+scripts/wait-healthy.sh minecraft 900
 
 R() { docker compose exec -T minecraft rcon-cli "$@"; }
+# Host port bindings of a service ("{}" = nothing published). Note: `docker compose port` prints ":0" and
+# succeeds for ports an image merely EXPOSEs, so it can't be used for this check.
+bindings() { docker inspect "$(docker compose ps -q "$1")" --format '{{json .HostConfig.PortBindings}}'; }
 has_marker() { R "execute if block 0 -60 0 minecraft:diamond_block run forceload query 0 0" | grep -q "marked for force loading"; }
 
 step "whitelist + ops contain the owner by UUID"
 grep -q '"uuid"' data/minecraft/whitelist.json && grep -q '"level": 4' data/minecraft/ops.json
 
 step "RCON is not reachable from the host's published ports"
-docker compose port minecraft 25575 >/dev/null 2>&1 && { echo "RCON published!"; exit 1; } || echo "ok: 25575 not published"
+if bindings minecraft | grep -q '25575'; then echo "RCON published!"; exit 1; fi
+bindings minecraft | grep -q '"25565/tcp"' && echo "ok: only the game port is published on minecraft"
+
+step "AI round trip: /ai ask from the console -> mod -> gateway -> worker (mock) -> mod"
+docker compose logs minecraft | grep -q '\[mcai\] ready: /ai'
+R "ai ask optest question"
+for _ in $(seq 1 20); do
+  docker compose logs --since 2m minecraft | grep -q '\[AI\] \[mock\] You asked: optest question' && break; sleep 1
+done
+docker compose logs --since 2m minecraft | grep -q '\[AI\] \[mock\] You asked: optest question'
+grep -q '"event": "request.done"' data/gateway/audit/audit.jsonl
+if grep -q 'optest question' data/gateway/audit/audit.jsonl; then echo "request text leaked into audit log"; exit 1; fi
+
+step "isolation: only the game port is published; the AI worker has no host mounts"
+for svc in gateway ai-worker backup; do
+  [[ "$(bindings "$svc")" == "{}" ]] || { echo "$svc publishes ports: $(bindings "$svc")"; exit 1; }
+done
+echo "ok: gateway, ai-worker and backup publish nothing"
+# Compose implements file secrets as read-only bind mounts; anything else (world data, docker.sock...) fails.
+mounts="$(docker inspect "$(docker compose ps -q ai-worker)" --format '{{range .Mounts}}{{.Destination}} rw={{.RW}};{{end}}')"
+[[ "$mounts" == "/run/secrets/worker_token rw=false;/run/secrets/ai_credential rw=false;" \
+  || "$mounts" == "/run/secrets/ai_credential rw=false;/run/secrets/worker_token rw=false;" ]] \
+  || { echo "unexpected ai-worker mounts: $mounts"; exit 1; }
+echo "ok: ai-worker mounts only its two secrets, read-only"
+docker compose exec -T ai-worker sh -c 'test ! -e /data && test ! -S /var/run/docker.sock' && echo "ok: no world data / docker socket in ai-worker"
 
 step "place marker, back up"
 R "forceload add 0 0"; sleep 2; R "setblock 0 -60 0 minecraft:diamond_block"; has_marker

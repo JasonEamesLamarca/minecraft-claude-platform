@@ -73,14 +73,39 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
-      - name: pytest (setup wizard, compose security invariants, restore safety)
+      - name: pytest (wizard, compose security, restore safety, AI core, gateway/worker integration with mock AI)
         run: pytest
+
+  mod-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: build + unit-test the Fabric mod (pinned Gradle/JDK 25 container, -Werror)
+        run: scripts/build-mod.sh
+      - name: mod tests report
+        run: grep -ho 'tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*" errors="[0-9]*"' minecraft-mod/build/test-results/test/*.xml
+
+  images:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: build gateway + ai-worker images
+        run: |
+          docker build -f containers/gateway/Dockerfile -t mcai-gateway:ci .
+          docker build -f containers/claude/Dockerfile -t mcai-ai-worker:ci .
+          docker run --rm --entrypoint claude mcai-ai-worker:ci --version
+          docker run --rm --entrypoint id mcai-ai-worker:ci -u | grep -qv '^0$'
+          docker run --rm --entrypoint id mcai-gateway:ci -u | grep -qv '^0$'
 
   operational:
     # Full first-start / backup / restore / crash-recovery cycle with a real server (~5 min).
     # Runs on main and on demand, not on every PR.
     if: github.event_name != 'pull_request'
-    needs: [unit-tests, shellcheck]
+    needs: [unit-tests, shellcheck, mod-build, images]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

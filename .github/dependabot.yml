@@ -11,8 +11,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  - package-ecosystem: docker
+    directories: ["/containers/gateway", "/containers/claude"]
+    schedule:
+      interval: weekly
+  - package-ecosystem: gradle
+    directory: /minecraft-mod
+    schedule:
+      interval: weekly
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
-# Gradle is added with the Fabric mod (Phase 2).
+# Not covered by Dependabot (update by hand, see docs/development/README.md): the Claude Code version
+# (ARG CLAUDE_CODE_VERSION in containers/claude/Dockerfile) and the Gradle image digest in scripts/build-mod.sh.

@@ -48,7 +48,7 @@ def test_success_creates_private_files(workdir):
     assert env["PUID"].isdigit() and env["PGID"].isdigit()
     assert mode(workdir / ".env") == 0o600
     assert mode(workdir / "secrets") == 0o700
-    for s in ("rcon_password", "gateway_mod_token"):
+    for s in ("rcon_password", "gateway_mod_token", "worker_token"):
         f = workdir / "secrets" / s
         assert mode(f) == 0o600
         value = f.read_text().strip()
@@ -70,24 +70,44 @@ def test_secrets_are_unique_per_install(workdir, tmp_path_factory):
     assert a != b
 
 
+def test_no_ai_leaves_empty_credential_file(workdir):
+    assert run_setup(workdir, *VALID).returncode == 0
+    f = workdir / "secrets" / "ai_credential"
+    assert f.exists() and f.read_text() == "" and mode(f) == 0o600
+
+
 def test_api_key_goes_to_secret_file_not_env(workdir):
     key = "sk-ant-api03-" + "A" * 40
     r = run_setup(workdir, *VALID[:-1], "api-key", stdin=key + "\n")
     assert r.returncode == 0, r.stderr
-    f = workdir / "secrets" / "anthropic_api_key"
+    f = workdir / "secrets" / "ai_credential"
     assert f.read_text() == key and mode(f) == 0o600
     assert key not in (workdir / ".env").read_text()
     assert key not in r.stdout + r.stderr
     assert read_env(workdir)["AI_AUTH_METHOD"] == "api-key"
 
 
-def test_switching_auth_method_removes_old_credential(workdir):
+def test_switching_auth_method_replaces_credential_and_warns(workdir):
     run_setup(workdir, *VALID[:-1], "api-key", stdin="sk-ant-api03-" + "A" * 40 + "\n")
-    r = run_setup(workdir, *VALID[:-1], "subscription", stdin="sk-ant-oat01-" + "B" * 40 + "\n")
+    token = "sk-ant-oat01-" + "B" * 40
+    r = run_setup(workdir, *VALID[:-1], "subscription", stdin=token + "\n")
     assert r.returncode == 0, r.stderr
-    assert not (workdir / "secrets" / "anthropic_api_key").exists()
-    assert (workdir / "secrets" / "claude_oauth_token").exists()
+    assert (workdir / "secrets" / "ai_credential").read_text() == token
     assert read_env(workdir)["AI_AUTH_METHOD"] == "subscription"
+    assert "legal-and-compliance" in r.stderr          # terms notice shown for subscription tokens
+
+
+def test_switching_to_none_clears_credential(workdir):
+    run_setup(workdir, *VALID[:-1], "api-key", stdin="sk-ant-api03-" + "A" * 40 + "\n")
+    assert run_setup(workdir, *VALID).returncode == 0
+    assert (workdir / "secrets" / "ai_credential").read_text() == ""
+
+
+def test_old_credential_files_are_removed(workdir):
+    (workdir / "secrets").mkdir(mode=0o700)
+    (workdir / "secrets" / "anthropic_api_key").write_text("old")
+    assert run_setup(workdir, *VALID).returncode == 0
+    assert not (workdir / "secrets" / "anthropic_api_key").exists()
 
 
 def test_empty_credential_rejected(workdir):
