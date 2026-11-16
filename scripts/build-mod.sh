@@ -7,8 +7,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Loom 1.19 needs a JDK 25 runtime for Gradle; the mod itself is compiled for Java 21 (--release 21).
 IMAGE="gradle:9.9.1-jdk25@sha256:39d599d8df1777d73b00b5bf928254ecd121802d518577fe08d41a3cf86aa45f"
 tasks=("$@"); [[ ${#tasks[@]} -gt 0 ]] || tasks=(clean build)
+# Gradle cache in a folder owned by the calling user (a fresh Docker volume would be root-owned and unwritable).
+CACHE="${MCAI_GRADLE_CACHE:-$ROOT/.cache/gradle}"
+mkdir -p "$CACHE"
 docker run --rm -u "$(id -u):$(id -g)" \
-  -e GRADLE_USER_HOME=/cache -v mcai-gradle-cache:/cache \
+  -e GRADLE_USER_HOME=/cache -v "$CACHE:/cache" \
   -v "$ROOT/minecraft-mod:/src" -v "$ROOT/LICENSE:/LICENSE:ro" -w /src \
   "$IMAGE" gradle --no-daemon --console=plain "${tasks[@]}"
 mkdir -p "$ROOT/dist/mod"

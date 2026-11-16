@@ -37,6 +37,7 @@ dist/
 out/
 
 # --- Build outputs ---
+.cache/
 build/
 .gradle/
 *.jar

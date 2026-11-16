@@ -15,6 +15,10 @@ updates:
     directories: ["/containers/gateway", "/containers/claude"]
     schedule:
       interval: weekly
+    # Base images: digest/patch updates only. Python/Node version upgrades are deliberate changes.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: gradle
     directory: /minecraft-mod
     schedule:
