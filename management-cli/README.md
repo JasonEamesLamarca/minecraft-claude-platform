@@ -18,7 +18,8 @@ management-cli/mcai help
 - **Choosing a key:** `--identity` on `remote add` uses a specific private key; otherwise your normal SSH keys
   and agent are used.
 
-**Full-screen console:** `pip install textual`, then run `mcai tui`. It shows a status bar (TPS, heap, players, AI
+**Full-screen console:** run `mcai tui --install` once (it puts Textual in its own venv under the mcai config
+folder; your system Python is not changed), then `mcai tui`. It shows a status bar (TPS, heap, players, AI
 budget, your role), the live server log with a command line for any `mcai` command, the player list
 (Enter: info, role, kick, whitelist) and the AI requests waiting for a decision (Enter: details, approve,
 cancel). It uses one SSH session and closes after 30 minutes without activity.

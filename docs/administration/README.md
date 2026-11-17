@@ -54,7 +54,7 @@ router: use a VPN to administer from outside.
 
 Add `--json` before the command for machine-readable output, for example `mcai --json status`.
 
-**Full-screen console:** `pip install textual`, then run `mcai tui`. It has a live log with a command line, the
+**Full-screen console:** run `mcai tui --install` once, then `mcai tui`. It has a live log with a command line, the
 players (Enter for actions), the AI requests waiting for approval and the automations (F7: enable, disable,
 approve, run, history). It is the successor of the earlier
 `mc-admin` console. Unlike that console, it never gets a shell on the host: every action is an `mcai` command

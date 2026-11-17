@@ -11,7 +11,7 @@ Needs Python 3.9+ and the OpenSSH client (`ssh`; built into Windows 10+ and macO
   mcai automations import welcome.toml     (definition files are read here and sent to the server)
   mcai help                (everything the server offers; what you may run depends on your role)
 
-Local commands: remote add|list|remove|default, version. Everything else runs on the server, which checks your
+Local commands: remote add|list|remove|default, version, tui (full-screen console; once: mcai tui --install). Everything else runs on the server, which checks your
 role for each command. The server's host key is pinned per remote (StrictHostKeyChecking=yes): a changed key
 stops the connection instead of trusting it.
 """
@@ -155,6 +155,43 @@ def file_argument(argv: list[str]) -> tuple[list[str], str | None]:
     return argv[:2] + ["--stdin"] + rest, text
 
 
+# ------------------------------------------------------------------ the full-screen console
+TEXTUAL = "textual==8.2.8"
+
+
+def tui_python(cfg_dir: Path | None = None) -> Path:
+    """Python of the console's own venv (created by 'mcai tui --install'), so the system Python stays untouched."""
+    venv = (cfg_dir or config_dir()) / "venv"
+    return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def install_tui() -> int:
+    py = tui_python()
+    venv = py.parent.parent
+    print(f"Creating {venv} and installing {TEXTUAL} (once, about 10 MB)...")
+    if subprocess.call([sys.executable, "-m", "venv", str(venv)]) != 0:
+        print("Could not create the venv. On Debian/Ubuntu/Pop!_OS: sudo apt install python3-venv", file=sys.stderr)
+        return 1
+    if subprocess.call([str(py), "-m", "pip", "install", "--quiet", TEXTUAL]) != 0:
+        return 1
+    print("Done. Start the console with: mcai tui")
+    return 0
+
+
+def start_tui(cfg: Config, remote: str | None) -> int:
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        py = tui_python()
+        if py.exists() and Path(sys.prefix).resolve() != py.parent.parent.resolve():   # not already in it
+            here = os.path.join(os.path.dirname(os.path.realpath(__file__)), "mcai_cli.py")
+            return subprocess.call([str(py), here, *(["-r", remote] if remote else []), "tui"])
+        raise SystemExit("The console needs the Textual library. Install it once (into its own folder, your system "
+                         "Python is not changed):\n  mcai tui --install") from None
+    from mcai_tui import run as run_tui
+    return run_tui(cfg, remote)
+
+
 # ------------------------------------------------------------------ local commands
 def cmd_remote(cfg: Config, argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="mcai remote", description="servers this computer administers")
@@ -241,9 +278,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if argv[:1] == ["remote"]:
         return cmd_remote(cfg, argv[1:])
+    if argv[:2] == ["tui", "--install"]:
+        return install_tui()
     if argv[:1] == ["tui"]:
-        from mcai_tui import run as run_tui  # optional TUI, needs: pip install textual
-        return run_tui(cfg, remote)
+        return start_tui(cfg, remote)
     name, r = cfg.remote(remote)
     argv, text = file_argument(argv)
     cmd = ssh_command(cfg, name, r, (["--json"] if as_json else []) + (argv or ["help"]))

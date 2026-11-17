@@ -4,7 +4,7 @@ Ported from the author's earlier `mc-admin` console, keeping its layout (live lo
 status bar, menus by key) but none of its privileges: it no longer opens a shell on the host or runs Docker. Every
 action is an `mcai` command that the server checks against your role, exactly as on the command line.
 
-    pip install textual          # once
+    mcai tui --install           # once: Textual in its own venv
     mcai tui                     # or: python management-cli/mcai_cli.py tui
 """
 from __future__ import annotations
