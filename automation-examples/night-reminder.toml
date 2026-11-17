@@ -1,0 +1,15 @@
+# A gentle reminder when night falls in the overworld.
+id = "night-reminder"
+name = "Nightfall reminder"
+description = "Reminds players to find shelter or sleep when night falls."
+enabled = false
+
+[trigger]
+event = "world.night_start"
+
+[conditions]
+players_online_min = 1
+
+[[actions]]
+type = "broadcast"
+text = "Night is falling. Light up your base or find a bed!"

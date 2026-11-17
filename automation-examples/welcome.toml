@@ -1,0 +1,19 @@
+# Greets players the first time they join, and tells everyone online.
+id = "welcome"
+name = "Welcome new players"
+description = "Greets a player on their first join and announces them to everyone online."
+enabled = false
+
+[trigger]
+event = "player.first_join"
+
+[[actions]]
+type = "message"
+text = "Welcome to the server, {player}! Type /ai help to see what the AI can do for you."
+
+[[actions]]
+type = "broadcast"
+text = "{player} joined for the first time. Say hello!"
+
+[limits]
+max_runs_per_hour = 30

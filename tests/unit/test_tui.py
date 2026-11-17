@@ -16,12 +16,15 @@ KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM0ZlbRxvJeha1Tyk7VWsHnGdq3m8m2Jw0zv1
 
 class FakeSession:
     calls = []
+    inputs = []
 
     def __init__(self, *a, **k):
         pass
 
-    def call(self, argv):
+    def call(self, argv, input=None):
         FakeSession.calls.append(argv)
+        if input is not None:
+            FakeSession.inputs.append(input)
         if argv == ["whoami"]:
             return {"ok": True, "data": {"account": "ann", "role": "auditor"}}
         if argv == ["status"]:
@@ -35,6 +38,11 @@ class FakeSession:
         if argv == ["ai", "pending"]:
             return {"ok": True, "data": [{"id": "abc123", "player_name": "Steve", "kind": "build", "status": "proposed",
                                           "title": "Tower"}]}
+        if argv == ["automations", "list"]:
+            return {"ok": True, "data": [{"id": "welcome", "state": "enabled", "last_status": "succeeded",
+                                          "trigger": "on player.first_join"},
+                                         {"id": "promote", "state": "pending_approval", "last_status": None,
+                                          "trigger": "on player.join"}]}
         if argv[0] == "logs":
             return {"ok": True, "data": {"lines": ["[12:00] hello"] if "--after" not in argv else [], "cursor": "1:5"}}
         if argv[0] == "say":
@@ -62,6 +70,14 @@ def test_tui_renders_and_reports_denials(tmp_path, monkeypatch):
             await asyncio.sleep(0.5)
             lines = [str(x.text) for x in app.query_one("#log").lines]
             assert any("needs the permission" in x for x in lines), lines
+            auto = app.query_one("#auto")
+            assert auto.row_count == 2 and "pending" in str(auto.get_row_at(1)[1])
+            await pilot.click("#cmd")
+            await pilot.press(*f"automations import {definition}", "enter")
+            await asyncio.sleep(0.5)
             app.exit()
+    definition = tmp_path / "welcome.toml"
+    definition.write_text('id = "welcome"\n')
     asyncio.run(scenario())
     assert ["say", "hi"] in FakeSession.calls
+    assert ["automations", "import", "--stdin"] in FakeSession.calls and FakeSession.inputs == ['id = "welcome"\n']

@@ -6,6 +6,24 @@ and the project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor 
 ## [Unreleased]
 
 ### Added
+- Phase 5, automations (ADR-0011):
+  - **Engine in the gateway.** Declarative TOML/JSON definitions with a trigger, conditions, up to 10 actions from
+    a fixed list (message, broadcast, notify_role, log, status_report, save, world, set_role, ai_message,
+    ai_build) and limits (timeout, retries, error policy, runs per hour, cooldown, AI USD and tokens per day).
+  - **Triggers.** Cron with IANA timezones (DST-safe) and intervals. Events: joins, first joins, leaves, areas,
+    advancements, `/ai trigger <name>`, build results, server start, thresholds (mspt, TPS, players, heap) and
+    world day, night and rain.
+  - **Guarantees.** Idempotency keys (no duplicate runs, also across restarts); interrupted runs aren't repeated;
+    retries resume at the failed action; loop and chain guards; global run and AI-call rates; suspension after
+    repeated failures or when the owner loses a permission.
+  - **Approval.** AI-written automations (`mcai automations propose`) and privileged ones (role changes, builds)
+    wait for approval; privileged ones need the owner.
+  - **Console.** `mcai automations …` (alias `auto`): list, show, runs, export, validate, import (local file),
+    examples and install, enable and disable, approve and reject, run now, delete. `mcai tui` has an Automations
+    panel (F7).
+  - **Mod.** It reports area enter and leave, completed advancements (mixin), `/ai trigger` and world
+    time/weather, and shows automation broadcasts.
+  - **Examples.** 11 example automations in `automation-examples/`, all validated by the tests.
 - Phase 4a, management and roles (ADR-0010):
   - **Roles.** Six roles (owner, admin, operator, builder, player, auditor). Players are identified by UUID; the
     owner comes from `MC_OWNER` at first join (online mode only). Assignment rules block escalation, and

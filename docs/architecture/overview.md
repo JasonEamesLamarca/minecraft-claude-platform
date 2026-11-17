@@ -1,20 +1,35 @@
 # Architecture overview
 
-> Implemented through Phase 4 (0.4.0). `automation` arrives in Phase 5.
+> Implemented through Phase 5 (0.5.0).
 
 ## Components
 
 | Service | Responsibility | Trust level | Talks to |
 | --- | --- | --- | --- |
-| `minecraft` | itzg/minecraft-server (Fabric) + the `mcai` server mod: `/ai` commands, join/leave + health reports, previews, block placement, undo snapshots. **Implemented** | Untrusted input (players) | gateway (token-authenticated API) |
-| `gateway` | Identities (player UUIDs, accounts), roles, request routing, plan validation, approvals, rate and budget limits, management API, audit log, SQLite state. **The only component that decides.** **Implemented** | Trusted core | minecraft (mod API; RCON on the internal network for management commands), ai-worker, ssh-gateway |
+| `minecraft` | itzg/minecraft-server (Fabric) + the `mcai` server mod: `/ai` commands, join/leave + health reports, previews, block placement, undo snapshots, game events for automations (areas, advancements, `/ai trigger`, world time). **Implemented** | Untrusted input (players) | gateway (token-authenticated API) |
+| `gateway` | Identities (player UUIDs, accounts), roles, request routing, plan validation, approvals, rate and budget limits, management API, automation engine, audit log, SQLite state. **The only component that decides.** **Implemented** | Trusted core | minecraft (mod API; RCON on the internal network for management commands), ai-worker, ssh-gateway |
 | `ai-worker` | Runs Claude Code per job with no tools (questions) or two MCP proposal tools (builds). Holds the AI credential. **Implemented** | Semi-trusted (model output is untrusted) | gateway; internet egress to the AI provider |
 | `ssh-gateway` | OpenSSH (unprivileged, keys only), `ForceCommand` → dispatcher; no shell, PTY, forwarding or files. **Implemented** | Edge | gateway management API |
 | `backup` | itzg/mc-backup: scheduled world backups. **Implemented** | Data | minecraft (RCON, read-only data) |
-| `automation` | Event triggers + scheduler, dedup, loop/rate guards (Phase 5) | Trusted core | gateway |
 
-The management API runs inside the gateway (ADR-0010), not as a separate service. The trust boundaries stay the
-same: the SSH gateway only authenticates and forwards, and the gateway authorizes every command.
+The management API (ADR-0010) and the automation engine (ADR-0011) run inside the gateway, not as separate
+services. The trust boundaries stay the same: the SSH gateway only authenticates and forwards, the gateway
+authorizes every command, and automations can only use the allowlisted actions the gateway already has.
+
+## Automations
+
+```mermaid
+flowchart LR
+  MOD[mod: joins, areas,<br/>advancements, /ai trigger,<br/>heartbeat: world + health] -->|events| ENG
+  CRON[scheduler<br/>cron + timezone, intervals] -->|due slots| ENG
+  BLD[build reports] -->|build.completed…| ENG
+  ENG[engine<br/>conditions · idempotency key ·<br/>loop/rate/AI guards] --> RUN[(runs<br/>SQLite)]
+  RUN --> EX[executor<br/>allowlisted actions,<br/>owner's permissions re-checked]
+  EX -->|message / broadcast| MOD2[mod]
+  EX -->|save, time, weather| RCON[RCON]
+  EX -->|ai_message, ai_build| Q[AI queue → worker]
+  EX --> AUD[audit log]
+```
 
 ## High-level flow
 

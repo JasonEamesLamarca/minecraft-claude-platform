@@ -22,7 +22,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Label, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
-from mcai_cli import Config, Session
+from mcai_cli import Config, Session, file_argument
 
 POLL_SECONDS = 5
 LOG_SECONDS = 2
@@ -95,12 +95,14 @@ class McaiTui(App):
     #main { height: 1fr; }
     #left { width: 3fr; }
     #right { width: 2fr; }
-    #logbox, #playersbox, #aibox { border: round $panel-lighten-2; border-title-color: $text-muted; }
-    #logbox:focus-within, #playersbox:focus-within, #aibox:focus-within { border: round $accent; }
+    #logbox, #playersbox, #aibox, #autobox { border: round $panel-lighten-2; border-title-color: $text-muted; }
+    #logbox:focus-within, #playersbox:focus-within, #aibox:focus-within, #autobox:focus-within {
+        border: round $accent; }
     #log { height: 1fr; }
     #cmd { height: 1; border: none; padding: 0 1; background: $boost; }
     #playersbox { height: 1fr; }
     #aibox { height: 1fr; }
+    #autobox { height: 1fr; }
     #keys { height: 1; background: $panel; color: $text-muted; padding: 0 1; }
     Choose, Ask, Confirm { align: center middle; background: $background 60%; }
     #dlg { width: 70; max-width: 95%; height: auto; border: thick $accent; background: $panel; padding: 1 2; }
@@ -114,6 +116,7 @@ class McaiTui(App):
         Binding("f2", "focus('cmd')", priority=True),
         Binding("f4", "focus('players')", priority=True),
         Binding("f6", "focus('ai')", priority=True),
+        Binding("f7", "focus('auto')", priority=True),
         Binding("f5", "refresh", priority=True),
         Binding("f1", "help", priority=True),
     ]
@@ -140,7 +143,10 @@ class McaiTui(App):
                     yield DataTable(id="players", cursor_type="row")
                 with Vertical(id="aibox"):
                     yield DataTable(id="ai", cursor_type="row")
-        yield Static(Text.from_markup("[b]F2[/] Command  [b]F4[/] Players  [b]F6[/] AI  [b]Enter[/] Actions  "
+                with Vertical(id="autobox"):
+                    yield DataTable(id="auto", cursor_type="row")
+        yield Static(Text.from_markup("[b]F2[/] Command  [b]F4[/] Players  [b]F6[/] AI  [b]F7[/] Automations  "
+                                      "[b]Enter[/] Actions  "
                                       "[b]F5[/] Refresh  [b]F1[/] Help  [b]^Q[/] Quit"), id="keys")
 
     def on_mount(self):
@@ -149,6 +155,7 @@ class McaiTui(App):
         self.query_one("#logbox").border_title = "Server log + command output (F2)"
         self.query_one("#playersbox").border_title = "Players (F4)"
         self.query_one("#aibox").border_title = "AI requests waiting (F6)"
+        self.query_one("#autobox").border_title = "Automations (F7)"
         p = self.query_one("#players", DataTable)
         for key, label, w in (("on", "", 1), ("name", "Player", 16), ("role", "Role", 9), ("seen", "Last seen", 16)):
             p.add_column(label, key=key, width=w)
@@ -156,18 +163,22 @@ class McaiTui(App):
         for key, label, w in (("id", "Id", 7), ("player", "Player", 12), ("kind", "Kind", 5), ("status", "Status", 9),
                               ("title", "Title", 24)):
             a.add_column(label, key=key, width=w)
+        au = self.query_one("#auto", DataTable)
+        for key, label, w in (("id", "Automation", 18), ("state", "State", 9), ("last", "Last run", 10),
+                              ("trigger", "Trigger", 22)):
+            au.add_column(label, key=key, width=w)
         self.query_one("#cmd").focus()
         self.say(f"Connecting to {name}…", "bold #5fafff")
         self.poller()
 
     # ---------- talking to the server ----------
-    def call(self, argv: list[str]) -> dict:
+    def call(self, argv: list[str], input: str | None = None) -> dict:
         """One command over the RPC session (reconnects once if the session dropped). Thread-safe."""
         with self.lock:
             for attempt in (1, 2):
                 if self.session is None:
                     self.session = Session(self.cfg, self.remote)
-                r = self.session.call(argv)
+                r = self.session.call(argv, input) if input is not None else self.session.call(argv)
                 if r.get("code") != "disconnected" or attempt == 2:
                     if r.get("code") == "disconnected":
                         self.session = None
@@ -220,6 +231,9 @@ class McaiTui(App):
         ai = self.call(["ai", "pending"])
         if ai.get("ok"):
             self.call_from_thread(self.fill_ai, ai["data"])
+        au = self.call(["automations", "list"])
+        if au.get("ok"):
+            self.call_from_thread(self.fill_auto, au["data"])
 
     def set_status(self, text: Text) -> None:
         self.query_one("#status", Static).update(text)
@@ -240,11 +254,22 @@ class McaiTui(App):
         for r in rows:
             t.add_row(r["id"], r["player_name"], r["kind"], r["status"], r.get("title") or "", key=r["id"])
 
+    def fill_auto(self, rows: list[dict]) -> None:
+        t = self.query_one("#auto", DataTable)
+        keep = t.cursor_row
+        t.clear()
+        colors = {"enabled": "green", "suspended": "red", "proposed": "yellow", "pending_approval": "yellow"}
+        for r in rows:
+            t.add_row(r["id"], Text(r["state"].replace("pending_approval", "pending"), style=colors.get(r["state"], "dim")),
+                      r.get("last_status") or "-", r["trigger"], key=r["id"])
+        if rows:
+            t.move_cursor(row=min(keep, len(rows) - 1))
+
     @work(thread=True)
-    def run_command(self, argv: list[str], echo: bool = True) -> None:
+    def run_command(self, argv: list[str], echo: bool = True, input: str | None = None) -> None:
         if echo:
             self.call_from_thread(self.say, "› mcai " + " ".join(shlex.quote(a) for a in argv), "bold")
-        r = self.call(argv)
+        r = self.call(argv, input)
         self.call_from_thread(self.say, r.get("text", "") or ("Done." if r.get("ok") else "Failed."),
                               "" if r.get("ok") else "red")
         self.refresh_tables()
@@ -267,7 +292,12 @@ class McaiTui(App):
         if argv[:2] == ["logs", "--follow"] or argv == ["rpc"]:
             self.say("The log already follows here.", "yellow")
             return
-        self.run_command(argv)
+        try:
+            argv, text = file_argument(argv)          # automations import FILE: the file is read here
+        except SystemExit as e:
+            self.say(str(e), "red")
+            return
+        self.run_command(argv, input=text)
 
     def on_key(self, event):
         cmd = self.query_one("#cmd", Input)
@@ -315,6 +345,32 @@ class McaiTui(App):
                 self.push_screen(Confirm(f"{choice.capitalize()} request {rid}?"),
                                  lambda yes: yes and self.run_command(["ai", choice, rid]))
         self.push_screen(Choose(f"AI request {rid} ({status})", options), picked)
+
+    @on(DataTable.RowSelected, "#auto")
+    def auto_menu(self, event):
+        aid = str(event.row_key.value)
+        state = str(self.query_one("#auto", DataTable).get_row(event.row_key)[1])
+        options = [("show", "Show definition and status"), ("runs", "Run history")]
+        if state in ("disabled", "suspended"):
+            options.append(("enable", "Enable"))
+        if state == "enabled":
+            options.append(("disable", "Disable"))
+        if state in ("enabled", "disabled"):
+            options.append(("run", "Run now (test)"))
+        if state in ("proposed", "pending"):
+            options += [("approve", "Approve (enables it)"), ("reject", "Reject")]
+
+        def picked(choice):
+            if choice in ("show", "runs"):
+                self.run_command(["automations", choice, aid])
+            elif choice == "run":
+                self.push_screen(Ask(f"Run {aid} now. Player (only if it acts on one):", ""),
+                                 lambda who: who is not None and self.run_command(
+                                     ["automations", "run", aid] + (["--player", who] if who else [])))
+            elif choice:
+                self.push_screen(Confirm(f"{choice.capitalize()} automation {aid}?"),
+                                 lambda yes: yes and self.run_command(["automations", choice, aid]))
+        self.push_screen(Choose(f"Automation {aid} ({state})", options), picked)
 
     def action_focus(self, wid: str) -> None:
         self.query_one(f"#{wid}").focus()

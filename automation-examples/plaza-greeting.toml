@@ -1,0 +1,16 @@
+# Greets players who walk onto the spawn plaza. Adjust the coordinates to your world.
+id = "plaza-greeting"
+name = "Plaza greeting"
+description = "Says hello when a player steps onto the spawn plaza."
+enabled = false
+
+[trigger]
+event = "player.enter_area"
+area = { name = "plaza", dimension = "minecraft:overworld", from = [-16, 60, -16], to = [16, 90, 16] }
+
+[[actions]]
+type = "message"
+text = "You are on the {area}. Type /ai trigger tour for a quick guide."
+
+[limits]
+cooldown_s = 600

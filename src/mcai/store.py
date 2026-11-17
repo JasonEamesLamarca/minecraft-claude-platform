@@ -87,6 +87,46 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at  TEXT NOT NULL,
     updated_by  TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS automations (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    definition  TEXT NOT NULL,            -- normalized JSON
+    state       TEXT NOT NULL,            -- see automation.STATES
+    owner       TEXT NOT NULL,            -- account:<name> or host; its permissions are checked at every run
+    source      TEXT NOT NULL,            -- manual | ai | example
+    privileged  INTEGER NOT NULL DEFAULT 0,
+    version     INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL,
+    created_by  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    approved_by TEXT,
+    approved_at TEXT,
+    note        TEXT,
+    next_run_at REAL,                     -- epoch seconds of the next schedule slot
+    runtime     TEXT NOT NULL DEFAULT '{}',
+    failures    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS automation_runs (
+    id            TEXT PRIMARY KEY,
+    automation_id TEXT NOT NULL,
+    version       INTEGER NOT NULL,
+    idem_key      TEXT NOT NULL UNIQUE,   -- schedule slot / event id: the same one never runs twice
+    trigger       TEXT NOT NULL,
+    subject       TEXT NOT NULL DEFAULT '',
+    event         TEXT NOT NULL DEFAULT '{}',
+    chain         TEXT NOT NULL DEFAULT '[]',
+    status        TEXT NOT NULL,
+    attempt       INTEGER NOT NULL DEFAULT 0,
+    step          INTEGER NOT NULL DEFAULT 0,
+    created       REAL NOT NULL,
+    started       REAL,
+    finished      REAL,
+    next_attempt  REAL,
+    error         TEXT,
+    output        TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS automation_runs_auto ON automation_runs(automation_id, created);
+CREATE INDEX IF NOT EXISTS automation_runs_status ON automation_runs(status);
 """
 
 
@@ -96,7 +136,8 @@ CREATE TABLE IF NOT EXISTS settings (
 ACTIVE = ("queued", "running", "proposed", "approved", "rolling_back")
 MIGRATIONS = [("op_level", "INTEGER NOT NULL DEFAULT 0"), ("plan", "TEXT"), ("summary", "TEXT"),
               ("proposed_at", "TEXT"), ("decided_by", "TEXT"), ("decided_at", "TEXT"), ("built_at", "TEXT"),
-              ("placed", "INTEGER NOT NULL DEFAULT 0"), ("snapshot", "TEXT")]
+              ("placed", "INTEGER NOT NULL DEFAULT 0"), ("snapshot", "TEXT"), ("automation_run", "TEXT"),
+              ("max_usd", "REAL")]
 AUDIT_FILE_RE = re.compile(r"^audit-(\d{4}-\d{2}-\d{2})(-legacy)?\.jsonl$")
 
 
@@ -250,7 +291,7 @@ class Store:
 
     # ---------- requests ----------
     def create_request(self, player_uuid: str, player_name: str, kind: str, text: str, context: dict,
-                       op_level: int = 0) -> str:
+                       op_level: int = 0, automation_run: str | None = None, max_usd: float | None = None) -> str:
         """Short ids (6 hex chars) so players can type them; collisions are retried."""
         with self._lock:
             for _ in range(20):
@@ -258,8 +299,9 @@ class Store:
                 try:
                     self.db.execute(
                         "INSERT INTO requests(id, player_uuid, player_name, kind, text, context, status, created_at,"
-                        " op_level) VALUES (?,?,?,?,?,?, 'queued', ?, ?)",
-                        (rid, player_uuid, player_name, kind, text, json.dumps(context), utcnow(), op_level))
+                        " op_level, automation_run, max_usd) VALUES (?,?,?,?,?,?, 'queued', ?, ?, ?, ?)",
+                        (rid, player_uuid, player_name, kind, text, json.dumps(context), utcnow(), op_level,
+                         automation_run, max_usd))
                     return rid
                 except sqlite3.IntegrityError:
                     continue
@@ -406,17 +448,31 @@ class Store:
         with self._lock:
             self.db.execute("UPDATE players SET role=? WHERE uuid=?", (role, uuid_))
 
-    def session_open(self, uuid_: str, name: str) -> None:
+    def session_open(self, uuid_: str, name: str) -> int:
         with self._lock:
             self.db.execute("UPDATE sessions SET left_at=? WHERE player_uuid=? AND left_at IS NULL", (utcnow(), uuid_))
-            self.db.execute("INSERT INTO sessions(player_uuid, name, joined_at) VALUES (?,?,?)", (uuid_, name, utcnow()))
+            return self.db.execute("INSERT INTO sessions(player_uuid, name, joined_at) VALUES (?,?,?)",
+                                   (uuid_, name, utcnow())).lastrowid
 
-    def session_close(self, uuid_: str) -> bool:
+    def session_close(self, uuid_: str) -> int | None:
+        """Close the open session; returns its id (None if there was none)."""
         with self._lock:
-            cur = self.db.execute("UPDATE sessions SET left_at=? WHERE player_uuid=? AND left_at IS NULL",
-                                  (utcnow(), uuid_))
+            row = self.db.execute("SELECT id FROM sessions WHERE player_uuid=? AND left_at IS NULL ORDER BY id DESC"
+                                  " LIMIT 1", (uuid_,)).fetchone()
+            self.db.execute("UPDATE sessions SET left_at=? WHERE player_uuid=? AND left_at IS NULL", (utcnow(), uuid_))
             self.db.execute("UPDATE players SET online=0 WHERE uuid=?", (uuid_,))
-            return cur.rowcount > 0
+            return row[0] if row else None
+
+    def playtime_hours(self, uuid_: str) -> float:
+        now = dt.datetime.now(dt.timezone.utc)
+        total = 0.0
+        with self._lock:
+            rows = self.db.execute("SELECT joined_at, left_at FROM sessions WHERE player_uuid=?", (uuid_,)).fetchall()
+        for r in rows:
+            a = dt.datetime.fromisoformat(r[0].replace("Z", "+00:00"))
+            b = dt.datetime.fromisoformat(r[1].replace("Z", "+00:00")) if r[1] else now
+            total += max(0.0, (b - a).total_seconds())
+        return total / 3600
 
     def online_uuids(self) -> set[str]:
         with self._lock:
@@ -528,3 +584,109 @@ class Store:
                 self.db.execute("INSERT INTO settings(key, value, updated_at, updated_by) VALUES (?,?,?,?) "
                                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at,"
                                 " updated_by=excluded.updated_by", (key, value, utcnow(), by))
+
+    # ---------- automations ----------
+    def automations(self, states: tuple | None = None) -> list[sqlite3.Row]:
+        q, args = "SELECT * FROM automations", []
+        if states:
+            q += f" WHERE state IN ({','.join('?' * len(states))})"
+            args = list(states)
+        with self._lock:
+            return self.db.execute(q + " ORDER BY id", args).fetchall()
+
+    def automation(self, aid: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.db.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone()
+
+    def automation_upsert(self, aid: str, by: str, at: str, **fields) -> int:
+        """Insert (version 1) or replace the definition (version + 1). Returns the version."""
+        with self._lock:
+            row = self.db.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()
+            if row is None:
+                cols = ["id", "created_at", "created_by", "version", *fields]
+                self.db.execute(f"INSERT INTO automations({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                                (aid, at, by, 1, *fields.values()))
+                return 1
+            version = row[0] + 1
+            sets = ", ".join(f"{k}=?" for k in fields)
+            self.db.execute(f"UPDATE automations SET {sets}, version=? WHERE id=?", (*fields.values(), version, aid))
+            return version
+
+    def automation_update(self, aid: str, **fields) -> None:
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._lock:
+            self.db.execute(f"UPDATE automations SET {sets} WHERE id=?", (*fields.values(), aid))
+
+    def run_create(self, aid: str, version: int, key: str, trigger: str, subject: str, event: dict, chain: list,
+                   created: float, status: str = "queued", error: str | None = None) -> str | None:
+        """None if a run with this idempotency key already exists (duplicate event / slot)."""
+        rid = uuid.uuid4().hex[:10]
+        with self._lock:
+            try:
+                self.db.execute(
+                    "INSERT INTO automation_runs(id, automation_id, version, idem_key, trigger, subject, event, chain,"
+                    " status, created, finished, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (rid, aid, version, key[:200], trigger, subject, json.dumps(event)[:4000], json.dumps(chain),
+                     status, created, created if status != "queued" else None, error))
+            except sqlite3.IntegrityError:
+                return None
+        return rid
+
+    def run(self, rid: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.db.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone()
+
+    def run_update(self, rid: str, **fields) -> None:
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._lock:
+            self.db.execute(f"UPDATE automation_runs SET {sets} WHERE id=?", (*fields.values(), rid))
+
+    def run_claim(self, rid: str, now: float) -> bool:
+        with self._lock:
+            return self.db.execute("UPDATE automation_runs SET status='running', started=COALESCE(started, ?) "
+                                   "WHERE id=? AND status IN ('queued','retry_wait')", (now, rid)).rowcount == 1
+
+    def runs_due(self, now: float) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.db.execute("SELECT id FROM automation_runs WHERE status='queued' OR (status='retry_wait' AND "
+                                   "next_attempt <= ?) ORDER BY created LIMIT 50", (now,)).fetchall()
+
+    def runs_with_status(self, statuses: tuple) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.db.execute(f"SELECT * FROM automation_runs WHERE status IN ({','.join('?' * len(statuses))})",
+                                   statuses).fetchall()
+
+    def runs_since(self, aid: str, since: float) -> int:
+        with self._lock:
+            return self.db.execute("SELECT COUNT(*) FROM automation_runs WHERE automation_id=? AND created >= ? AND "
+                                   "status != 'skipped'", (aid, since)).fetchone()[0]
+
+    def last_run_at(self, aid: str, subject: str) -> float:
+        with self._lock:
+            row = self.db.execute("SELECT MAX(created) FROM automation_runs WHERE automation_id=? AND subject=? AND "
+                                  "status != 'skipped'", (aid, subject)).fetchone()
+        return row[0] or 0.0
+
+    def runs_list(self, aid: str | None = None, n: int = 20) -> list[sqlite3.Row]:
+        q, args = "SELECT * FROM automation_runs", []
+        if aid:
+            q += " WHERE automation_id=?"
+            args.append(aid)
+        with self._lock:
+            return self.db.execute(q + " ORDER BY created DESC, rowid DESC LIMIT ?", (*args, n)).fetchall()
+
+    def automation_ai_usage(self, aid: str) -> tuple[float, int]:
+        """AI cost (USD) and tokens used today (UTC) by one automation's runs."""
+        with self._lock:
+            row = self.db.execute(
+                "SELECT COALESCE(SUM(r.cost_usd),0), COALESCE(SUM(r.input_tokens + r.output_tokens),0) FROM requests r "
+                "JOIN automation_runs a ON a.id = r.automation_run WHERE a.automation_id=? AND r.created_at >= ?",
+                (aid, utc_day_start())).fetchone()
+        return float(row[0]), int(row[1])
+
+    def automation_ai_calls(self, seconds: int) -> int:
+        since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=seconds)).isoformat(
+            timespec="milliseconds").replace("+00:00", "Z")
+        with self._lock:
+            return self.db.execute("SELECT COUNT(*) FROM requests WHERE automation_run IS NOT NULL AND created_at >= ?",
+                                   (since,)).fetchone()[0]

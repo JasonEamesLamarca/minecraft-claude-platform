@@ -1,0 +1,21 @@
+# A user-management workflow: regular players become builders after 10 hours of play.
+# PRIVILEGED (changes roles): only the owner can approve it. It never lowers a role.
+id = "promote-builders"
+name = "Promote regular players"
+description = "Gives the builder role to players with 10 hours of playtime when they join."
+enabled = false
+
+[trigger]
+event = "player.join"
+
+[conditions]
+player_roles = ["player"]
+playtime_hours_min = 10
+
+[[actions]]
+type = "set_role"
+role = "builder"
+
+[[actions]]
+type = "message"
+text = "Thanks for playing, {player}! You can now build with the AI: /ai build <description>."

@@ -1,0 +1,12 @@
+# Writes a status line into the audit log every 6 hours (read it with: mcai audit show --event automation.log).
+id = "status-report"
+name = "Periodic status report"
+description = "Every 6 hours: players online, TPS and AI spend, into the audit log."
+enabled = false
+
+[trigger]
+every = "6h"
+
+[[actions]]
+type = "status_report"
+to = "log"

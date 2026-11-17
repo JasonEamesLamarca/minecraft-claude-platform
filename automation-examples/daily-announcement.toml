@@ -1,0 +1,19 @@
+# A fixed announcement every evening, only when someone is online to read it.
+id = "daily-announcement"
+name = "Evening announcement"
+description = "Reminds players at 18:00 local time that the world is backed up every night."
+timezone = "Europe/Berlin"
+enabled = false
+
+[trigger]
+schedule = "0 18 * * *"
+
+[conditions]
+players_online_min = 1
+
+[[actions]]
+type = "broadcast"
+text = "It's {time}: {players_online} player(s) online. The world is backed up every night - build boldly!"
+
+[limits]
+misfire = "skip"

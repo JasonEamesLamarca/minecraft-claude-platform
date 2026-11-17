@@ -10,7 +10,8 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 
-from .prompt import build_builder_prompt, build_system_prompt, build_user_prompt
+from .prompt import (build_automation_prompt, build_automation_user_prompt, build_builder_prompt,
+                     build_system_prompt, build_user_prompt)
 
 log = logging.getLogger("mcai.provider")
 
@@ -40,8 +41,16 @@ class Provider:
     def build(self, job: dict) -> ProviderResult:
         raise NotImplementedError
 
+    def automation(self, job: dict) -> ProviderResult:
+        raise NotImplementedError
+
     def run(self, job: dict) -> ProviderResult:
-        return self.build(job) if job.get("kind") == "build" else self.answer(job)
+        kind = job.get("kind")
+        if kind == "build":
+            return self.build(job)
+        if kind == "automation":
+            return self.automation(job)
+        return self.answer(job)
 
 
 class NoneProvider(Provider):
@@ -52,6 +61,7 @@ class NoneProvider(Provider):
         return ProviderResult(False, error="no AI credential configured", error_code="not_configured", provider=self.name)
 
     build = answer
+    automation = answer
 
 
 class MockProvider(Provider):
@@ -77,6 +87,24 @@ class MockProvider(Provider):
                  "block": "minecraft:stone_bricks", "mode": "hollow"},
                 {"op": "setblock", "pos": [ox + 3, oy + 4, oz + 3], "block": "minecraft:torch"}]}
         return ProviderResult(True, text="[mock] A small stone pillar with a torch.", plan=plan, provider=self.name)
+
+    def automation(self, job: dict) -> ProviderResult:
+        """A fixed definition: a daily broadcast; MOCK_BAD_AUTOMATION asks for a forbidden action type,
+        MOCK_PRIVILEGED for a role change (needs the owner's approval)."""
+        text = job.get("text", "")
+        if "MOCK_BAD_AUTOMATION" in text:
+            d = {"id": "mock-bad", "name": "Bad", "trigger": {"every": "1h"},
+                 "actions": [{"type": "command", "command": "op everyone"}]}
+        elif "MOCK_PRIVILEGED" in text:
+            d = {"id": "mock-promote", "name": "Promote regulars", "trigger": {"event": "player.join"},
+                 "conditions": {"playtime_hours_min": 5, "player_roles": ["player"]},
+                 "actions": [{"type": "set_role", "role": "builder"}]}
+        else:
+            d = {"id": "mock-daily", "name": "Daily greeting", "description": text[:100],
+                 "trigger": {"schedule": "0 18 * * *"}, "conditions": {"players_online_min": 1},
+                 "actions": [{"type": "broadcast", "text": "Good evening, {players_online} players online!"}]}
+        return ProviderResult(True, text="Here is the definition:\n" + json.dumps(d), provider=self.name,
+                              input_tokens=len(text) // 4, output_tokens=50)
 
 
 class ClaudeCodeProvider(Provider):
@@ -107,11 +135,12 @@ class ClaudeCodeProvider(Provider):
         self.max_build_usd = max_build_usd
         self.build_max_turns = build_max_turns
 
-    def command(self) -> list[str]:
+    def command(self, max_usd: float | None = None, system_prompt: str | None = None) -> list[str]:
+        budget = min(self.max_request_usd, max_usd) if max_usd else self.max_request_usd
         cmd = [self.binary, "-p", "--output-format", "json", "--tools", "",
                "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-               "--max-turns", "1", "--max-budget-usd", f"{self.max_request_usd:.2f}",
-               "--no-session-persistence", "--system-prompt", self.system_prompt]
+               "--max-turns", "1", "--max-budget-usd", f"{budget:.2f}",
+               "--no-session-persistence", "--system-prompt", system_prompt or self.system_prompt]
         if self.model:
             cmd += ["--model", self.model]
         return cmd
@@ -168,7 +197,12 @@ class ClaudeCodeProvider(Provider):
 
     def answer(self, job: dict) -> ProviderResult:
         prompt = build_user_prompt(job.get("player_name", "Player"), job.get("text", ""), job.get("context"))
-        return self._run(self.command(), prompt, job)
+        return self._run(self.command(job.get("max_usd")), prompt, job)
+
+    def automation(self, job: dict) -> ProviderResult:
+        """An automation proposal: text only (no tools); the gateway validates the JSON it contains."""
+        system = build_automation_prompt(os.environ.get("AUTOMATION_TIMEZONE", "") or os.environ.get("TZ", "") or "UTC")
+        return self._run(self.command(system_prompt=system), build_automation_user_prompt(job.get("text", "")), job)
 
     def _run(self, cmd: list[str], prompt: str, job: dict) -> ProviderResult:
         timeout = max(10, int(job.get("timeout_s", 180)) - 10)

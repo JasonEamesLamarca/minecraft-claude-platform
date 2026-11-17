@@ -1,0 +1,19 @@
+# World maintenance: flush the world to disk every 30 minutes while players are online.
+# Full backups are made by the backup service (BACKUP_INTERVAL), not by automations.
+id = "autosave"
+name = "Autosave"
+description = "Saves the world every 30 minutes while someone is playing."
+enabled = false
+
+[trigger]
+every = "30m"
+
+[conditions]
+players_online_min = 1
+
+[[actions]]
+type = "save"
+
+[limits]
+retries = 2
+retry_delay_s = 60

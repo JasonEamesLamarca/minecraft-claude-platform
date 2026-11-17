@@ -3,3 +3,4 @@
 src/mcai/**/__pycache__
 !containers/management/sshd_config
 !containers/management/mcai-server
+!automation-examples/*.toml

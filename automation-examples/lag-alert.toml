@@ -1,0 +1,23 @@
+# Tells online staff when the server is struggling (average tick over 45 ms for a minute) and logs it.
+id = "lag-alert"
+name = "Lag alert"
+description = "Notifies operators and above when ticks take longer than 45 ms for 60 seconds."
+enabled = false
+
+[trigger]
+event = "server.threshold"
+metric = "mspt"
+above = 45
+for_s = 60
+
+[[actions]]
+type = "notify_role"
+min_role = "operator"
+text = "Server under load: {metric} = {value} ms per tick. Check 'mcai status'."
+
+[[actions]]
+type = "log"
+text = "Lag alert: {metric} = {value}"
+
+[limits]
+cooldown_s = 900

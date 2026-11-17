@@ -7,7 +7,9 @@ Mod API (Bearer gateway_mod_token):
   POST /v1/mod/undo                {player_uuid, player_name, request_id?}  restore the snapshot of a build
   POST /v1/mod/link                {player_uuid, player_name, code}         link a management account
   POST /v1/mod/players             {event: join|leave, player_uuid, player_name}
-  POST /v1/mod/heartbeat           {players: [{uuid, name}], mspt, heap_used_mb, heap_max_mb, uptime_s, version}
+  POST /v1/mod/heartbeat           {players: [{uuid, name}], mspt, heap_used_mb, heap_max_mb, uptime_s, version,
+                                    world: {time, raining, thundering}}  -> {areas: [...]} to watch for automations
+  POST /v1/mod/game-events         {type: area_enter|area_leave|advancement|trigger, event_id, player_uuid, ...}
   POST /v1/mod/builds/<id>/report  {status: invalid|built|failed|rolled_back|rollback_failed|pruned, placed, error}
   GET  /v1/mod/events?wait=25      long-poll: messages, previews, execute/rollback/prune orders for the mod
   GET  /v1/mod/status?player_uuid=...
@@ -43,6 +45,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__
 from . import management
+from .automation import Engine
 from .config import GatewaySettings, setup_logging
 from .plan import Limits, PlanError, validate
 from .ratelimit import RateLimiter
@@ -89,7 +92,7 @@ def _age_s(iso: str | None) -> float:
 
 
 class Gateway:
-    def __init__(self, settings: GatewaySettings, store: Store, clock=time.monotonic):
+    def __init__(self, settings: GatewaySettings, store: Store, clock=time.monotonic, wallclock=time.time):
         self.s = settings
         self.store = store
         self.clock = clock
@@ -113,6 +116,10 @@ class Gateway:
         for row in store.fail_unfinished("gateway restarted"):
             store.audit("request.interrupted", request_id=row["id"], player_uuid=row["player_uuid"],
                         previous_status=row["status"], reason="gateway restarted")
+        self.automation = Engine(self, now=wallclock, default_tz=settings.automation_timezone,
+                                 max_runs_per_minute=settings.automation_max_runs_per_minute,
+                                 ai_calls_per_hour=settings.automation_ai_calls_per_hour,
+                                 examples_dir=settings.automation_examples_dir)
 
     # ---------- policy ----------
     def limits(self) -> Limits:
@@ -337,15 +344,21 @@ class Gateway:
             raise Rejected(400, "Invalid player.", "bad_player")
         name = clean_name(body.get("player_name", ""))
         event = body.get("event")
+        data = {"player_uuid": player_uuid, "player_name": name}
         if event == "join":
             is_new, old_name = self.store.player_seen(player_uuid, name, online=True)
             self._bootstrap_owner(player_uuid, name)
-            self.store.session_open(player_uuid, name)
+            sid = self.store.session_open(player_uuid, name)
             extra = {"first_join": True} if is_new else ({"previous_name": old_name} if old_name != name else {})
             self.store.audit("player.join", player_uuid=player_uuid, player_name=name, **extra)
+            if is_new:
+                self.automation.emit("player.first_join", data, key=f"first:{player_uuid}")
+            self.automation.emit("player.join", data, key=f"session:{sid}")
         elif event == "leave":
-            if self.store.session_close(player_uuid):
+            sid = self.store.session_close(player_uuid)
+            if sid:
                 self.store.audit("player.leave", player_uuid=player_uuid, player_name=name)
+                self.automation.emit("player.leave", data, key=f"leave:{sid}")
         else:
             raise Rejected(400, "bad event", "bad_event")
         return {"ok": True}
@@ -357,8 +370,12 @@ class Gateway:
             if isinstance(p, dict) and UUID_RE.match(str(p.get("uuid", "")).lower()):
                 online[str(p["uuid"]).lower()] = clean_name(p.get("name", ""))
         for gone in self.store.online_uuids() - set(online):        # missed leave events (gateway restarts)
-            if self.store.session_close(gone):
+            sid = self.store.session_close(gone)
+            if sid:
                 self.store.audit("player.leave", player_uuid=gone, reason="not online at heartbeat")
+                row = self.store.player(gone)
+                self.automation.emit("player.leave", {"player_uuid": gone, "player_name": row["name"] if row else "?"},
+                                     key=f"leave:{sid}")
         known = self.store.online_uuids()
         for u, n in online.items():
             if u not in known:
@@ -372,7 +389,45 @@ class Gateway:
         stats["players"] = sorted(online.values())
         with self.cond:
             self.heartbeat, self.heartbeat_at = stats, self.clock()
-        return {"ok": True}
+        world = body.get("world") if isinstance(body.get("world"), dict) else {}
+        self.automation.on_heartbeat({**stats, "players": list(online)}, world)
+        return {"ok": True, "areas": self.automation.areas()}
+
+    def game_event(self, body: dict) -> dict:
+        """Area enter/leave, advancements and /ai trigger, reported by the mod (player events for automations)."""
+        typ = body.get("type")
+        event_id = str(body.get("event_id", "")).lower()
+        if not re.fullmatch(r"[0-9a-f-]{8,36}", event_id):
+            raise Rejected(400, "bad event id", "bad_event")
+        actor = self.mod_actor(body)
+        if actor.kind != "player":
+            raise Rejected(400, "Only players can do that.", "bad_player")
+        data = {"player_uuid": actor.id, "player_name": actor.name}
+        if typ in ("area_enter", "area_leave"):
+            aid = str(body.get("area", ""))
+            name = self.automation.area_name(aid)
+            if name is None:
+                return {"ok": True, "started": 0}
+            event = "player.enter_area" if typ == "area_enter" else "player.leave_area"
+            runs = self.automation.emit(event, {**data, "area": name}, key=f"area:{event_id}", only={aid})
+            return {"ok": True, "started": len(runs)}
+        if typ == "advancement":
+            adv = str(body.get("advancement", ""))
+            if not re.fullmatch(r"[a-z0-9_.-]{1,32}:[a-z0-9_./-]{1,100}", adv):
+                raise Rejected(400, "bad advancement", "bad_event")
+            title = clean_reply(str(body.get("title", "")), 64) if body.get("title") else adv
+            runs = self.automation.emit("player.advancement", {**data, "advancement": title, "advancement_id": adv},
+                                        key=f"adv:{actor.id}:{adv}")
+            return {"ok": True, "started": len(runs)}
+        if typ == "trigger":
+            name = str(body.get("name", "")).lower()
+            if not re.fullmatch(r"[a-z0-9_-]{1,32}", name) or name not in self.automation.trigger_names():
+                raise Rejected(404, f"There is nothing called '{name[:32]}' to start here.", "unknown")
+            runs = self.automation.emit("player.trigger", {**data, "trigger": name}, key=f"trigger:{event_id}")
+            if not runs:
+                return {"ok": False, "message": f"You can't start '{name}' right now."}
+            return {"ok": True, "message": f"Started '{name}'.", "started": len(runs)}
+        raise Rejected(400, "bad event type", "bad_event")
 
     def link(self, body: dict) -> dict:
         actor = self.mod_actor(body)
@@ -421,6 +476,16 @@ class Gateway:
         with self.cond:
             self.executing.pop(rid, None)
         self.store.audit(f"build.{status}", request_id=rid, player_uuid=owner, placed=placed, error=error)
+        event = {"built": "build.completed", "failed": "build.failed", "rolled_back": "build.undone"}.get(status)
+        if event:
+            chain: tuple = ()
+            if row["automation_run"]:
+                run = self.store.run(row["automation_run"])
+                if run:
+                    chain = tuple(json.loads(run["chain"])) + (run["automation_id"],)
+            title = json.loads(row["summary"])["title"] if row["summary"] else ""
+            self.automation.emit(event, {"player_uuid": owner, "player_name": row["player_name"], "title": title,
+                                         "request": rid, "blocks": max(0, placed)}, key=f"{event}:{rid}", chain=chain)
         messages = {
             "invalid": (f"The AI's plan {rid} used blocks this server doesn't accept ({error}). Try /ai build again.", "error"),
             "built": (f"Build {rid} finished: {placed} blocks placed. Not happy? /ai undo {rid}", "info"),
@@ -437,6 +502,47 @@ class Gateway:
             self.events.append({"id": uuid.uuid4().hex[:8], "type": "message", "player_uuid": player_uuid,
                                 "text": text, "level": level, "request_id": request_id})
             self.cond.notify_all()
+
+    def broadcast(self, text: str) -> None:
+        with self.cond:
+            self.events.append({"id": uuid.uuid4().hex[:8], "type": "broadcast", "text": text})
+            self.cond.notify_all()
+
+    def enqueue_internal(self, kind: str, text: str, automation_run: str | None, context: dict | None = None,
+                         max_usd: float | None = None) -> str:
+        """A request made by the platform itself (automations, automation proposals), not by a player. It counts
+        against the same queue and daily budget. Results go back to the automation engine, not to a player."""
+        with self.cond:
+            if len(self.jobs) >= self.s.max_queue:
+                raise Rejected(503, "The AI queue is full.", "queue_full")
+            rid = self.store.create_request(CONSOLE_UUID, "Automation", kind, text[:2000], context or {},
+                                            automation_run=automation_run, max_usd=max_usd)
+            self.jobs.append(rid)
+            self.cond.notify_all()
+        self.store.audit("request.accepted", request_id=rid, player_uuid=CONSOLE_UUID, kind=kind, automation_run=automation_run,
+                         text=text)
+        return rid
+
+    def cancel_internal(self, rid: str) -> None:
+        if self.store.transition(rid, ("queued", "running"), "cancelled", decided_by="automation", decided_at=utcnow()):
+            with self.cond:
+                if rid in self.jobs:
+                    self.jobs.remove(rid)
+            self.store.audit("request.cancelled", request_id=rid, cancelled_by="automation timeout")
+
+    def status_line(self) -> str:
+        hb = dict(self.heartbeat) if self.mod_online() else {}
+        parts = []
+        if hb:
+            tps = round(min(20.0, 1000 / hb["mspt"]), 1) if hb.get("mspt") else "?"
+            players = hb.get("players", [])
+            parts.append(f"Server online, {tps} TPS, {len(players)} player(s) online"
+                         + (f": {', '.join(players[:10])}" if players else ""))
+        else:
+            parts.append("Server: no heartbeat")
+        parts.append(f"AI ${self.store.spend_today():.2f} of ${self.daily_budget():.2f} today"
+                     + ("" if self.ai_enabled() else " (AI off)"))
+        return " | ".join(parts)
 
     def take_events(self, wait: float) -> list[dict]:
         deadline = self.clock() + wait
@@ -490,7 +596,9 @@ class Gateway:
                     self.inflight[rid] = self.clock() + timeout
                     ctx = json.loads(row["context"])
                     job = {"request_id": rid, "kind": row["kind"], "text": row["text"], "player_name": row["player_name"],
-                           "context": ctx, "timeout_s": timeout}
+                           "context": ctx if row["kind"] != "automation" else {}, "timeout_s": timeout}
+                    if row["max_usd"]:
+                        job["max_usd"] = row["max_usd"]
                     if row["kind"] == "build":
                         lim = self.limits()
                         job["build"] = {
@@ -518,6 +626,16 @@ class Gateway:
         error = str(result.get("error", ""))[:500] or None
         with self.cond:
             self.inflight.pop(rid, None)
+
+        if row["kind"] == "automation":
+            accepted, message = (self.automation.proposal_result(row, str(result.get("text", ""))) if ok
+                                 else (False, error or "failed"))
+            if not self.store.finish(rid, accepted, message if accepted else None, None if accepted else message,
+                                     *usage):
+                return False
+            self.store.audit("request.done" if accepted else "request.failed", request_id=rid, kind="automation",
+                             cost_usd=round(cost, 6), error=None if accepted else message[:200])
+            return True
 
         if row["kind"] == "build" and ok:
             ctx = json.loads(row["context"])
@@ -554,6 +672,9 @@ class Gateway:
             return False   # duplicate, late (timed out) or cancelled: never deliver twice
         self.store.audit("request.done" if ok else "request.failed", request_id=rid, player_uuid=row["player_uuid"],
                          cost_usd=round(cost, 6), provider=result.get("provider"), error_code=code or None)
+        if row["automation_run"]:
+            self.automation.ai_done(rid)       # the automation delivers the text itself
+            return True
         if ok:
             self.notify(row["player_uuid"], reply, "info", rid)
         elif code == "not_configured":
@@ -613,6 +734,7 @@ class Gateway:
             self.cond.notify_all()
     def stop(self) -> None:
         self._stop.set()
+        self.automation.stop()
         with self.cond:
             self.cond.notify_all()
 
@@ -649,7 +771,8 @@ def make_handler(gw: Gateway):
                 n = int(self.headers.get("Content-Length", "0"))
             except ValueError:
                 n = -1
-            limit = MAX_BODY * 64 if self.path.startswith(("/v1/worker/", "/v1/mod/heartbeat")) else MAX_BODY
+            limit = MAX_BODY * 64 if self.path.startswith(("/v1/worker/", "/v1/mod/heartbeat")) else \
+                MAX_BODY * 8 if self.path.startswith("/v1/mgmt/run") else MAX_BODY
             if n < 0 or n > limit:
                 self._send(413, {"message": "request too large"})
                 return None
@@ -698,6 +821,7 @@ def make_handler(gw: Gateway):
                 "/v1/mod/link": ("mod", gw.link),
                 "/v1/mod/players": ("mod", gw.player_event),
                 "/v1/mod/heartbeat": ("mod", gw.heartbeat_in),
+                "/v1/mod/game-events": ("mod", gw.game_event),
                 "/v1/mgmt/run": ("mgmt", lambda b: management.run(gw, b)),
                 "/v1/mgmt/ssh-event": ("mgmt", lambda b: management.ssh_event(gw, b)),
                 "/v1/mgmt/session": ("mgmt", lambda b: management.session_event(gw, b)),
@@ -743,6 +867,7 @@ def serve(settings: GatewaySettings | None = None) -> None:
                 log.exception("sweep failed")
 
     threading.Thread(target=sweeper, daemon=True).start()
+    gw.automation.start(settings.automation_workers)
     gw.store.audit("gateway.started", version=__version__)
     log.info("gateway %s listening on %s:%d", __version__, settings.host, settings.port)
     import signal

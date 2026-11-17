@@ -1,0 +1,15 @@
+# Announces finished AI builds.
+id = "build-celebration"
+name = "Build celebration"
+description = "Tells everyone when an approved AI build is finished."
+enabled = false
+
+[trigger]
+event = "build.completed"
+
+[[actions]]
+type = "broadcast"
+text = "{player} just finished '{title}' ({blocks} blocks). Go and have a look!"
+
+[limits]
+cooldown_s = 60

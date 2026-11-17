@@ -1,0 +1,20 @@
+# A player-started interaction: /ai trigger tour
+id = "spawn-tour"
+name = "Spawn tour"
+description = "Players type /ai trigger tour for a short guide."
+enabled = false
+
+[trigger]
+event = "player.trigger"
+name = "tour"
+
+[[actions]]
+type = "message"
+text = "Welcome to spawn, {player}. The town hall is north, the farms east, the mine entrance south-west."
+
+[[actions]]
+type = "message"
+text = "Ask the AI anything with /ai ask, or plan a build with /ai build."
+
+[limits]
+cooldown_s = 120

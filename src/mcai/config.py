@@ -35,6 +35,15 @@ def _optional_secret(path: str, min_len: int = 32) -> str:
     return read_secret(path, min_len) if path and Path(path).exists() else ""
 
 
+def _timezone(name: str) -> str:
+    from .cron import ScheduleError, timezone
+    try:
+        timezone(name)
+    except ScheduleError as e:
+        raise ValueError(f"AUTOMATION_TIMEZONE/TZ: {e}") from None
+    return name
+
+
 def _optional_dir(path: str) -> Path | None:
     return Path(path) if path and Path(path).is_dir() else None
 
@@ -72,6 +81,12 @@ class GatewaySettings:
     rcon_port: int = 25575
     rcon_password: str = ""
     audit_retention_days: int = 365
+    # automations (Phase 5)
+    automation_timezone: str = "UTC"       # default for definitions without a timezone
+    automation_max_runs_per_minute: int = 30
+    automation_ai_calls_per_hour: int = 10
+    automation_workers: int = 2
+    automation_examples_dir: Path | None = None
 
     @classmethod
     def from_env(cls) -> "GatewaySettings":
@@ -108,6 +123,13 @@ class GatewaySettings:
             rcon_port=env_int("RCON_PORT", 25575, 1, 65535),
             rcon_password=_optional_secret(os.environ.get("RCON_PASSWORD_FILE", "/run/secrets/rcon_password"), 8),
             audit_retention_days=env_int("AUDIT_RETENTION_DAYS", 365, 0, 36500),
+            automation_timezone=_timezone(os.environ.get("AUTOMATION_TIMEZONE", "") or os.environ.get("TZ", "")
+                                          or "UTC"),
+            automation_max_runs_per_minute=env_int("AUTOMATION_MAX_RUNS_PER_MINUTE", 30, 1, 600),
+            automation_ai_calls_per_hour=env_int("AUTOMATION_AI_CALLS_PER_HOUR", 10, 0, 1000),
+            automation_workers=env_int("AUTOMATION_WORKERS", 2, 1, 8),
+            automation_examples_dir=_optional_dir(os.environ.get("AUTOMATION_EXAMPLES_DIR",
+                                                                 "/app/automation-examples")),
         )
 
 

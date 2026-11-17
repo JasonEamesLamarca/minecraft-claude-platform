@@ -173,6 +173,11 @@ services:
       AI_BUILD_MAX_Y: "${AI_BUILD_MAX_Y:-64}"
       AI_BUILD_MAX_Z: "${AI_BUILD_MAX_Z:-48}"
       AI_BUILD_MAX_DISTANCE: "${AI_BUILD_MAX_DISTANCE:-64}"
+      # Automations: default timezone for definitions without one; global guards.
+      TZ: "${TZ:-UTC}"
+      AUTOMATION_TIMEZONE: "${AUTOMATION_TIMEZONE:-}"
+      AUTOMATION_MAX_RUNS_PER_MINUTE: "${AUTOMATION_MAX_RUNS_PER_MINUTE:-30}"
+      AUTOMATION_AI_CALLS_PER_HOUR: "${AUTOMATION_AI_CALLS_PER_HOUR:-10}"
     secrets:
       - gateway_mod_token
       - worker_token
@@ -218,6 +223,7 @@ services:
       AI_BUILD_MAX_TURNS: "${AI_BUILD_MAX_TURNS:-10}"
       AI_MAX_CONCURRENT_JOBS: "${AI_MAX_CONCURRENT_JOBS:-2}"
       MC_VERSION: "${MC_VERSION:-1.21.1}"
+      AUTOMATION_TIMEZONE: "${AUTOMATION_TIMEZONE:-}"
       TZ: "${TZ:-UTC}"
     secrets:
       - worker_token

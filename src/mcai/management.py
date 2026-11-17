@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import __version__, rbac
+from .automation import AutomationError, Definition, DefinitionError, parse_definition, parse_text
+from .cron import timezone
 from .rbac import Actor
 from .rcon import RconError, clean_command
 from .sanitize import clean_name
@@ -98,7 +100,8 @@ def build_parser() -> Parser:
             p = subs.add_parser(c.path[0], help=c.help, description=f"{c.help} (needs: {c.permission})")
         else:
             if c.path[0] not in groups:
-                g = subs.add_parser(c.path[0], help=GROUP_HELP.get(c.path[0], ""))
+                g = subs.add_parser(c.path[0], help=GROUP_HELP.get(c.path[0], ""),
+                                    aliases=GROUP_ALIASES.get(c.path[0], []))
                 groups[c.path[0]] = g.add_subparsers(dest="sub", metavar="<subcommand>")
             p = groups[c.path[0]].add_parser(c.path[1], help=c.help, description=f"{c.help} (needs: {c.permission})")
         for names, kw in c.args:
@@ -109,7 +112,8 @@ def build_parser() -> Parser:
 
 GROUP_HELP = {"players": "players, roles and sessions", "whitelist": "server whitelist", "server": "save, restart, console",
               "ai": "AI requests, approvals, limits", "audit": "audit history", "accounts": "management accounts and SSH keys",
-              "backups": "world backups"}
+              "backups": "world backups", "automations": "event and scheduled automations (alias: auto)"}
+GROUP_ALIASES = {"automations": ["auto"]}
 
 
 # ---------------------------------------------------------------- helpers
@@ -660,6 +664,217 @@ def c_key_revoke(gw, actor, a, ctx):
     return Result(f"Revoked {a.fingerprint} ({acc['name']}). It stops working within seconds.")
 
 
+# ---------------------------------------------------------------- automations
+def _when(ts, tz_name: str) -> str:
+    if not ts:
+        return "-"
+    local = dt.datetime.fromtimestamp(ts, timezone(tz_name))
+    return local.strftime("%Y-%m-%d %H:%M %Z")
+
+
+def _definition_input(gw, ctx) -> Definition:
+    text = ctx.get("input") or ""
+    if not text.strip():
+        raise MgmtError("usage", "Give a definition file: 'mcai automations import FILE' (the mcai client sends it). "
+                                 "With plain ssh: ssh ... automations import --stdin < FILE")
+    try:
+        return parse_definition(parse_text(text), gw.automation.default_tz)
+    except DefinitionError as e:
+        raise MgmtError("invalid", f"Invalid definition: {e}") from None
+
+
+def _describe(gw, d: Definition, row=None) -> list[str]:
+    lines = [f"{d.id}: {d.name}" + (f" - {d.description}" if d.description else ""),
+             f"Trigger: {d.trigger_text()}"]
+    if d.conditions:
+        lines.append("Conditions: " + ", ".join(f"{k}={v}" for k, v in d.conditions.items()))
+    for i, a in enumerate(d.actions, 1):
+        detail = a.get("text") or a.get("prompt") or " ".join(f"{k}={v}" for k, v in a.items() if k != "type")
+        lines.append(f"  {i}. {a['type']}: {str(detail)[:100]}")
+    lim = d.limits
+    lines.append(f"Limits: timeout {lim['timeout_s']}s, retries {lim['retries']}, on_error {lim['on_error']}, "
+                 f"max {lim['max_runs_per_hour']}/h" + (f", cooldown {lim['cooldown_s']}s" if lim["cooldown_s"] else "")
+                 + (f", AI ${lim['ai_max_usd_per_day']:.2f}/day" if lim["ai_max_usd_per_day"] else ""))
+    lines.append("Needs: " + ", ".join(d.required_permissions)
+                 + ("  (PRIVILEGED: the owner must approve it)" if d.privileged else ""))
+    if d.schedule:
+        nxt = row["next_run_at"] if row is not None and row["state"] == "enabled" else None
+        upcoming = [nxt] if nxt else d.schedule.upcoming(gw.automation.now(), 3)
+        lines.append(("Next run: " if nxt else "Would run at: ") + ", ".join(_when(t, d.timezone) for t in upcoming))
+    return lines
+
+
+def _auto_rows(gw, rows):
+    out = []
+    for r in rows:
+        try:
+            d = gw.automation.definition(r)
+            trig = d.trigger_text()
+        except (DefinitionError, ValueError):
+            d, trig = None, "(invalid)"
+        last = gw.store.runs_list(r["id"], 1)
+        out.append({"id": r["id"], "name": r["name"], "state": r["state"], "trigger": trig, "owner": r["owner"],
+                    "privileged": bool(r["privileged"]), "version": r["version"], "source": r["source"],
+                    "next_run": _when(r["next_run_at"], d.timezone) if d and r["next_run_at"] else None,
+                    "last_status": last[0]["status"] if last else None,
+                    "last_run": _when(last[0]["created"], "UTC") if last else None, "note": r["note"]})
+    return out
+
+
+@command("automations list", "automations.read", "automations, their state and last run",
+         arg("--all", action="store_true", help="include rejected and deleted ones"))
+def c_auto_list(gw, actor, a, ctx):
+    rows = [r for r in gw.store.automations() if a.all or r["state"] not in ("rejected", "deleted")]
+    data = _auto_rows(gw, rows)
+    if not data:
+        return Result("No automations yet. See 'mcai automations examples'.", [])
+    return Result(table([[x["id"], x["state"] + ("*" if x["privileged"] else ""), x["trigger"][:40],
+                          f"{x['last_status'] or '-'} {x['last_run'] or ''}".strip(), x["next_run"] or "",
+                          x["owner"]] for x in data], ["id", "state", "trigger", "last run", "next run", "owner"])
+                  + "\n(* privileged: changes roles or the world; the owner approves it)", data)
+
+
+@command("automations show", "automations.read", "one automation: trigger, conditions, actions, limits, runs",
+         arg("id"))
+def c_auto_show(gw, actor, a, ctx):
+    row = gw.automation._row(a.id)
+    d = gw.automation.definition(row)
+    lines = [f"State: {row['state']} (version {row['version']}, {row['source']}, owner {row['owner']}"
+             + (f", approved by {row['approved_by']}" if row["approved_by"] else "") + ")"]
+    if row["note"]:
+        lines.append(f"Note: {row['note']}")
+    lines += _describe(gw, d, row)
+    runs = gw.store.runs_list(row["id"], 5)
+    if runs:
+        lines.append("Recent runs: " + ", ".join(f"{r['id']} {r['status']} ({_when(r['created'], 'UTC')})" for r in runs))
+    return Result("\n".join(lines), {"automation": dict(row), "definition": d.as_dict(),
+                                     "permissions": d.required_permissions, "privileged": d.privileged})
+
+
+@command("automations runs", "automations.read", "execution history", arg("id", nargs="?"),
+         arg("-n", type=int, default=20))
+def c_auto_runs(gw, actor, a, ctx):
+    if a.id:
+        gw.automation._row(a.id)
+    rows = gw.store.runs_list(a.id, max(1, min(a.n, 500)))
+    data = [{k: r[k] for k in ("id", "automation_id", "trigger", "status", "attempt", "created", "finished", "error")}
+            | {"output": json.loads(r["output"] or "[]")} for r in rows]
+    if not rows:
+        return Result("No runs yet.", [])
+    return Result(table([[r["id"], r["automation_id"], r["trigger"], r["status"], r["attempt"],
+                          _when(r["created"], "UTC"), (r["error"] or "")[:50]] for r in rows],
+                        ["run", "automation", "trigger", "status", "try", "created", "error"]), data)
+
+
+@command("automations export", "automations.read", "the definition as JSON (edit it and import --replace)", arg("id"))
+def c_auto_export(gw, actor, a, ctx):
+    d = gw.automation.definition(gw.automation._row(a.id))
+    return Result(json.dumps(d.as_dict(), indent=2), d.as_dict())
+
+
+@command("automations validate", "automations.manage", "check a definition file without saving it",
+         arg("--stdin", action="store_true", help=argparse.SUPPRESS))
+def c_auto_validate(gw, actor, a, ctx):
+    d = _definition_input(gw, ctx)
+    return Result("Valid.\n" + "\n".join(_describe(gw, d)), {"definition": d.as_dict(),
+                                                              "permissions": d.required_permissions,
+                                                              "privileged": d.privileged})
+
+
+@command("automations import", "automations.manage", "create (or with --replace update) an automation from a file",
+         arg("--stdin", action="store_true", help=argparse.SUPPRESS),
+         arg("--replace", action="store_true", help="replace an existing automation with the same id"), audited=True)
+def c_auto_import(gw, actor, a, ctx):
+    d = _definition_input(gw, ctx)
+    r = gw.automation.save(actor, d, "manual", replace=a.replace)
+    hint = {"pending_approval": f" It is privileged: the owner approves it with 'mcai automations approve {d.id}'.",
+            "disabled": f" Enable it with 'mcai automations enable {d.id}'."}.get(r["state"], "")
+    return Result(f"Saved '{d.id}' (version {r['version']}): {r['state']}.{hint}", r)
+
+
+@command("automations examples", "automations.read", "example automations shipped with the platform")
+def c_auto_examples(gw, actor, a, ctx):
+    ex = gw.automation.examples()
+    if not ex:
+        return Result("No examples found (AUTOMATION_EXAMPLES_DIR).", [])
+    rows = [[e.get("id", e["file"]), e.get("trigger", "invalid: " + e.get("error", ""))[:40],
+             "yes" if e.get("privileged") else "", e.get("name", "")] for e in ex]
+    return Result(table(rows, ["example", "trigger", "privileged", "name"])
+                  + "\nInstall one (disabled) with 'mcai automations install <example>'.",
+                  [{k: v for k, v in e.items() if k != "definition"} for e in ex])
+
+
+@command("automations install", "automations.manage", "install an example (disabled until you enable it)",
+         arg("example"), arg("--replace", action="store_true"), audited=True)
+def c_auto_install(gw, actor, a, ctx):
+    ex = {e["id"]: e for e in gw.automation.examples() if "id" in e}
+    if a.example not in ex:
+        raise MgmtError("not_found", f"No example '{a.example}'. See 'mcai automations examples'.")
+    d = ex[a.example]["definition"]
+    r = gw.automation.save(actor, d, "example", replace=a.replace)
+    return Result(f"Installed '{d.id}': {r['state']}." + (f" Enable it with 'mcai automations enable {d.id}'."
+                                                         if r["state"] == "disabled" else
+                                                         f" The owner approves it with 'mcai automations approve {d.id}'."
+                                                         if r["state"] == "pending_approval" else ""), r)
+
+
+def _auto_simple(method, **kw):
+    def fn(gw, actor, a, ctx):
+        return Result(getattr(gw.automation, method)(actor, a.id, **kw))
+    return fn
+
+
+command("automations enable", "automations.manage", "start running an automation", arg("id"),
+        audited=True)(_auto_simple("set_enabled", enabled=True))
+command("automations disable", "automations.manage", "stop an automation", arg("id"),
+        audited=True)(_auto_simple("set_enabled", enabled=False))
+command("automations approve", "automations.manage", "approve a proposed or privileged automation (enables it)",
+        arg("id"), audited=True)(_auto_simple("approve"))
+
+
+@command("automations reject", "automations.manage", "reject a proposal", arg("id"), arg("reason", nargs="*"),
+         audited=True)
+def c_auto_reject(gw, actor, a, ctx):
+    return Result(gw.automation.reject(actor, a.id, " ".join(a.reason)))
+
+
+@command("automations delete", "automations.manage", "delete an automation (history is kept)", arg("id"),
+         arg("--yes", action="store_true", help="required: confirms"), audited=True)
+def c_auto_delete(gw, actor, a, ctx):
+    if not a.yes:
+        raise MgmtError("confirm", f"Re-run with --yes to delete '{a.id}'.")
+    return Result(gw.automation.delete(actor, a.id))
+
+
+@command("automations run", "automations.manage", "run an automation now (also a disabled one, to test it)",
+         arg("id"), arg("--player", help="name or UUID, for automations that act on a player"), audited=True)
+def c_auto_run(gw, actor, a, ctx):
+    player = None
+    if a.player:
+        p = find_player(gw, a.player)
+        player = {"player_uuid": p["uuid"], "player_name": p["name"]}
+    rid = gw.automation.run_now(actor, a.id, player)
+    return Result(f"Started run {rid}. See 'mcai automations runs {a.id}'.", {"run": rid})
+
+
+@command("automations propose", "automations.manage", "ask the AI to write an automation (you review it first)",
+         arg("description", nargs="+"), audited=True)
+def c_auto_propose(gw, actor, a, ctx):
+    if not actor.can("ai.configure"):
+        raise MgmtError("forbidden", "Proposals spend AI budget: they need ai.configure.")
+    if not gw.ai_enabled():
+        raise MgmtError("unavailable", "The AI is switched off ('mcai ai enable').")
+    budget = gw.daily_budget()
+    if budget <= 0 or gw.store.spend_today() >= budget:
+        raise MgmtError("limited", "The AI has reached today's budget.")
+    text = " ".join(a.description).strip()
+    if len(text) > 1000:
+        raise MgmtError("usage", "Keep the description under 1000 characters.")
+    rid = gw.automation.propose(actor, text)
+    return Result(f"Asked the AI (request {rid}). In a minute: 'mcai ai show {rid}', then "
+                  "'mcai automations list' shows the proposal; nothing runs until you approve it.", {"request_id": rid})
+
+
 # ---------------------------------------------------------------- entry point
 def _params(ns) -> dict:
     out = {}
@@ -675,7 +890,7 @@ def _params(ns) -> dict:
 def run(gw, body: dict) -> dict:
     from .gateway import Rejected
     ctx = {"source_ip": str(body.get("source_ip", ""))[:64], "session": str(body.get("session", ""))[:40],
-           "fingerprint": ""}
+           "fingerprint": "", "input": str(body.get("input", ""))[:65536]}
     try:
         key = parse_public_key(str(body.get("key", "")))
     except KeyError_:
@@ -720,6 +935,8 @@ def run(gw, body: dict) -> dict:
     except MgmtError as e:
         res = Result(e.message, None, False, e.code)
     except Rejected as e:
+        res = Result(e.message, None, False, e.code)
+    except AutomationError as e:
         res = Result(e.message, None, False, e.code)
     except Exception:
         import logging

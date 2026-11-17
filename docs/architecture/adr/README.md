@@ -15,3 +15,4 @@ Each significant decision is recorded as `NNNN-title.md`. The template: **Status
 | [0008](0008-gateway-protocol-phase2.md) | Gateway protocol and AI runtime (Phase 2) | Accepted |
 | [0009](0009-ai-builds.md) | AI builds: structured plans, approval, mod-side execution, structure snapshots | Accepted |
 | [0010](0010-management-rbac-ssh.md) | Management over SSH (forced command), roles by UUID/account, hash-chained audit | Accepted |
+| [0011](0011-automation-engine.md) | Automation engine in the gateway: declarative definitions, idempotent runs, guards, approval | Accepted |

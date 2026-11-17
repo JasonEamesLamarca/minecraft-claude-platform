@@ -49,11 +49,14 @@ router: use a VPN to administer from outside.
 | Audit history, export, integrity | `mcai audit show --since 7d [--event role.] [--format csv]`, `mcai audit verify` | auditor, admin+ |
 | Accounts and SSH keys | `mcai accounts list|add|role|disable|enable|keys|key-add|key-revoke` | admin+ (own keys: anyone) |
 | Backups | `mcai backups list` | auditor, operator+ |
+| Automations: list, details, run history | `mcai automations list`, `show <id>`, `runs [id]` (alias `mcai auto`) | auditor, operator+ |
+| Automations: import, enable, run, ask the AI | `mcai automations import <file>`, `enable <id>`, `run <id>`, `propose <text>` | admin+ (privileged ones: owner approves) |
 
 Add `--json` before the command for machine-readable output, for example `mcai --json status`.
 
 **Full-screen console:** `pip install textual`, then run `mcai tui`. It has a live log with a command line, the
-players (Enter for actions) and the AI requests waiting for approval. It is the successor of the earlier
+players (Enter for actions), the AI requests waiting for approval and the automations (F7: enable, disable,
+approve, run, history). It is the successor of the earlier
 `mc-admin` console. Unlike that console, it never gets a shell on the host: every action is an `mcai` command
 checked against your role. Interactive Claude Code sessions on the server are not offered over SSH, because
 that would need a terminal (PTY) inside the platform.
@@ -262,3 +265,132 @@ the world, so backups include them. A snapshot is deleted when its build is undo
   key, an exhausted plan, or the per-request budget being too low.
 - **`/ai` is unknown:** check that `dist/mod/` contains the jar (`scripts/build-mod.sh`), and look for `[mcai]` in
   `docker compose logs minecraft`.
+
+## Automations
+
+Automations do something when an event happens in the game or at a set time: greet new players, announce a
+daily challenge, warn staff about lag, save the world while people play. They are text files (TOML or JSON), not
+code: each one has a trigger, optional conditions, up to 10 actions from a fixed list, and limits. The design and
+its guarantees are in [ADR-0011](../architecture/adr/0011-automation-engine.md).
+
+### Getting started
+
+```bash
+mcai automations examples                 # 11 examples shipped with the platform
+mcai automations install welcome          # installed disabled
+mcai automations show welcome             # trigger, actions, limits, permissions it needs
+mcai automations enable welcome
+mcai automations runs welcome             # history: status, attempts, errors, output of each action
+```
+
+To write your own, copy an example from [`automation-examples/`](../../automation-examples/), change it, and
+send it from your computer (the `mcai` client reads the file locally):
+
+```bash
+mcai automations validate my-event.toml   # check it and see when it would run
+mcai automations import my-event.toml     # add --replace to update an existing one
+mcai automations run my-event [--player Alex]   # try it now (works while disabled too)
+```
+
+Or ask the AI to write one. It only drafts it: nothing runs until you have read it and approved it.
+
+```bash
+mcai automations propose "every Saturday at 20:00 Berlin time, announce the weekly build contest"
+mcai ai show <request id>                 # a few seconds later: the proposal's id, or why it was invalid
+mcai automations show <id>
+mcai automations approve <id>             # or: reject <id> [reason]
+```
+
+### A definition
+
+```toml
+id = "daily-announcement"          # lowercase, digits and dashes
+name = "Evening announcement"
+description = "Reminds players at 18:00 that the world is backed up."
+timezone = "Europe/Berlin"         # default: AUTOMATION_TIMEZONE, else TZ, else UTC
+enabled = false                    # state on import (examples are always disabled)
+
+[trigger]
+schedule = "0 18 * * *"            # or: every = "30m"   or: event = "player.join" (see below)
+
+[conditions]                       # all optional; all must hold
+players_online_min = 1
+time_between = ["08:00", "23:00"]  # in the timezone above; may wrap past midnight
+days = ["fri", "sat", "sun"]
+
+[[actions]]
+type = "broadcast"
+text = "It's {time}: {players_online} player(s) online."
+
+[limits]                           # all optional
+timeout_s = 60
+retries = 0                        # retries resume at the failed action
+retry_delay_s = 30                 # doubled each retry
+on_error = "stop"                  # stop | continue (with the next action) | disable
+max_runs_per_hour = 12
+cooldown_s = 0                     # per player for player events, otherwise per automation
+misfire = "skip"                   # a slot missed while the server was down: skip, or run once
+misfire_grace_s = 300              # up to this late, a missed slot still runs
+ai_max_usd_per_day = 0             # must be above 0 to use AI actions
+ai_max_tokens_per_day = 50000
+```
+
+**Events.**
+
+| Event | Extra trigger keys | Placeholders |
+| --- | --- | --- |
+| `player.join`, `player.first_join`, `player.leave` | | `{player}` |
+| `player.enter_area`, `player.leave_area` | `area = {name, dimension, from = [x,y,z], to = [x,y,z]}` (max 512 per side) | `{player}`, `{area}` |
+| `player.advancement` | `advancement = "minecraft:story/*"` (glob on the id; default all) | `{player}`, `{advancement}` |
+| `player.trigger` | `name = "tour"`: players type `/ai trigger tour` | `{player}`, `{trigger}` |
+| `build.completed`, `build.failed`, `build.undone` | | `{player}`, `{title}`, `{request}`, `{blocks}` |
+| `server.started` | | |
+| `server.threshold` | `metric` (mspt, tps, players_online, heap_pct), `above` or `below`, `for_s` | `{metric}`, `{value}` |
+| `world.day_start`, `world.night_start`, `world.rain_start`, `world.rain_stop` | | |
+
+Every text can also use `{players_online}`, `{time}`, `{date}` and `{automation}`. A misspelled placeholder is
+rejected when you import the file. A threshold fires once when the condition has held for `for_s` seconds, and
+again only after it has cleared. World time and weather arrive with the mod's heartbeat (every 30 s), and area
+changes reach the mod within 30 s of enabling an automation.
+
+**Actions.** These are the only things an automation can do: there is no way to run console commands or code.
+
+| Action | What it does | Permission the owner needs |
+| --- | --- | --- |
+| `message` (`text`) | chat message to the player who triggered it | players.moderate |
+| `broadcast` (`text`) | chat message to everyone online | players.moderate |
+| `notify_role` (`text`, `min_role`, default operator) | message to online players with at least that role | players.moderate |
+| `log` (`text`) | a record in the audit log (`mcai audit show --event automation.log`) | status.read |
+| `status_report` (`to` = log, staff or broadcast) | players online, TPS, AI spend | status.read (+ players.moderate) |
+| `save` | flush the world to disk | server.control |
+| `world` (`set` = time or weather, `value`) | `time` day/noon/night/midnight, `weather` clear/rain/thunder | server.control |
+| `set_role` (`role` = player or builder) | give the triggering player that role; never lowers a role | roles.assign, **privileged** |
+| `ai_message` (`prompt`, `to` = broadcast, player or staff, `max_usd`) | asks the AI (text only) and sends the answer | ai.configure |
+| `ai_build` (`prompt`, `dimension`, `at = [x,y,z]`) | asks the AI for a build proposal; staff approve it as usual | ai.build, **privileged** |
+
+### Who may do what
+
+- **Read** (list, show, runs, export, examples): auditor, operator, admin, owner.
+- **Change** (import, install, enable, disable, run, delete, propose): admin and owner. You must hold every
+  permission the automation's actions need, and you become its **owner**. If the owner later loses one of those
+  permissions or the account is disabled, the next run is denied and the automation is **suspended**.
+- **Privileged** automations (`set_role`, `ai_build`) created by an admin wait as `pending_approval` until the
+  owner runs `mcai automations approve <id>`. AI proposals always wait for approval; privileged ones need the owner.
+
+### Safeguards
+
+- **No duplicates.** Each schedule slot and each event runs at most once, also across restarts. A run that was
+  executing when the gateway stopped is marked `interrupted` and not repeated.
+- **No loops.** An event caused by an automation (for example a build it requested) can't start that automation
+  again, and chains stop after 3 automations.
+- **Rates.** `max_runs_per_hour` and `cooldown_s` per automation; `AUTOMATION_MAX_RUNS_PER_MINUTE` (30) overall.
+- **AI spend.** Per automation and UTC day: `ai_max_usd_per_day` and `ai_max_tokens_per_day`. Overall:
+  `AUTOMATION_AI_CALLS_PER_HOUR` (10), plus the shared daily budget and `mcai ai disable`.
+- **Failures.** After 5 failed runs in a row (or 1 with `on_error = "disable"`) the automation is suspended; fix
+  the cause and `mcai automations enable <id>`.
+- **Audit.** Every change, approval, run result, refused run (`automation.guard`) and skipped slot
+  (`automation.misfire`) is in the audit log.
+
+Backups are not an automation action: the backup service makes them on its own schedule (`BACKUP_INTERVAL`),
+because starting one needs host privileges that nothing in the platform has. The `autosave` example flushes the
+world between backups.

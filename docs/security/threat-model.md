@@ -1,4 +1,4 @@
-# Threat model (v3, Phase 4)
+# Threat model (v4, Phase 5)
 
 STRIDE-style model of the architecture. **Status** says what is implemented and tested, and what is still planned.
 The model is reviewed at every phase gate.
@@ -29,6 +29,7 @@ actions).
 5. Admin → ssh-gateway (internet/LAN)
 6. ssh-gateway → management API
 7. Example download (GitHub release) → gateway
+8. Automation definitions (admins, the AI) → automation engine (inside the gateway)
 
 ## Threats and planned mitigations
 
@@ -107,3 +108,18 @@ New residual risks (Phase 4):
   attacker who controls the host can rewrite the whole chain. For that case, export the audit log off the host
   regularly (`mcai audit show --format jsonl`).
 - Source IPs of host-local SSH connections show the Docker bridge address.
+
+## Implementation status (Phase 5: automations)
+
+| # | Status | Tests |
+| --- | --- | --- |
+| T7 | **Implemented:** definitions are data with a fixed action list (no commands, no code). Runs have UNIQUE idempotency keys (schedule slot, session, event id), so nothing runs twice, also after a crash or restart. Interrupted runs are not repeated, and retries resume at the failed action. Loop chain and depth guard (3). Per-automation runs/hour and cooldown, global runs/minute, consecutive-failure suspension. AI-written automations are `proposed` until approved; privileged ones (roles, builds) need the owner. The owner's permissions are re-checked at every run | `test_automations.py` (37 tests: fake clock, restart, dedup, loops, rates, retries, approvals, HTTP game events, management), `test_automation_defs.py` (44), `test_cron.py` (32, incl. DST); operational test (import over SSH, forbidden action refused, run reaches the game, world event) |
+| T3 | Extended to automations: per-automation USD and token caps per day (AI off unless set), `AUTOMATION_AI_CALLS_PER_HOUR`, `max_usd` per call, shared daily budget and AI switch | `test_ai_message_and_its_limits`, `test_ai_off_and_global_ai_rate` |
+| T1 | Automation proposals: Claude Code with **no tools**, request text delimited, the JSON answer validated exactly like a hand-written file | `test_ai_proposals_need_approval` (invalid and privileged proposals) |
+| T5 | New mod endpoint `/v1/mod/game-events` (areas, advancements, triggers): identity from the UUID only, event ids validated, unknown areas/triggers do nothing | `test_areas_served_and_entered`, `test_trigger_command`, `test_advancement_glob` |
+
+New residual risks (Phase 5):
+- An admin can write an automation that annoys players (frequent broadcasts) within its rate limits. Every change
+  and run is audited with the owner.
+- A run interrupted by a crash is not repeated (at most once), so an action can be skipped.
+- Advancement events depend on a mixin into Minecraft code; a Minecraft update needs a matching mod build.

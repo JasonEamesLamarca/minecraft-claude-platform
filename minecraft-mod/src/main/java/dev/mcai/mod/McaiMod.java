@@ -6,17 +6,22 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.advancement.AdvancementEntry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
@@ -26,20 +31,23 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Server-side entrypoint. Registers the /ai command (name configurable), relays gateway messages to players,
- * shows build previews and executes approved builds, and reports joins/leaves and server health. Authorization
- * is decided by the gateway from the player's UUID and role; the mod only enforces a minimum vanilla permission
- * level for the command itself.
+ * shows build previews and executes approved builds, and reports joins/leaves, server health and the game
+ * events automations listen for (areas, advancements, /ai trigger). Authorization is decided by the gateway from
+ * the player's UUID and role; the mod only enforces a minimum vanilla permission level for the command itself.
  */
 public final class McaiMod implements DedicatedServerModInitializer {
     static final Logger LOG = LoggerFactory.getLogger("mcai");
     static final UUID CONSOLE = new UUID(0L, 0L);
     private static final String ID_ARG = "id";
+    private static final Pattern TRIGGER = Pattern.compile("[a-z0-9_-]{1,32}");
+    private static volatile McaiMod instance;
 
     private McaiConfig config;
     private GatewayClient gateway;
     private BuildExecutor builds;
     private volatile MinecraftServer server;
     private final Map<UUID, String> online = new HashMap<>();
+    private final AreaWatcher areas = new AreaWatcher();
     private long startedAt;
 
     @Override
@@ -51,6 +59,7 @@ public final class McaiMod implements DedicatedServerModInitializer {
             return;
         }
         gateway = new GatewayClient(config);
+        instance = this;
         builds = new BuildExecutor((id, report) -> gateway.post("/v1/mod/builds/" + id + "/report", report),
                 Integer.parseInt(System.getenv().getOrDefault("MCAI_BLOCKS_PER_TICK", "2000")));
         CommandRegistrationCallback.EVENT.register((dispatcher, registries, env) -> register(dispatcher));
@@ -65,6 +74,9 @@ public final class McaiMod implements DedicatedServerModInitializer {
             builds.tick(s);
             if (s.getTicks() % 20 == 0) {
                 trackPlayers(s);
+            }
+            if (s.getTicks() % 10 == 5 && areas.size() > 0) {
+                checkAreas(s);
             }
             if (s.getTicks() % 600 == 100) {
                 heartbeat(s);
@@ -89,7 +101,9 @@ public final class McaiMod implements DedicatedServerModInitializer {
                 .then(CommandManager.literal("build").then(CommandManager.argument("text", StringArgumentType.greedyString())
                         .executes(c -> request(c, "build"))))
                 .then(CommandManager.literal("link").then(CommandManager.argument("code", StringArgumentType.word())
-                        .executes(this::link)));
+                        .executes(this::link)))
+                .then(CommandManager.literal("trigger").then(CommandManager.argument("name", StringArgumentType.word())
+                        .executes(this::trigger)));
         for (String action : new String[] {"approve", "cancel", "undo"}) {
             root.then(CommandManager.literal(action)
                     .executes(c -> decide(c, action, null))
@@ -111,7 +125,8 @@ public final class McaiMod implements DedicatedServerModInitializer {
     private int help(CommandContext<ServerCommandSource> ctx) {
         String c = "/" + config.commandName();
         say(ctx.getSource(), c + " ask <question> | " + c + " build <description> | " + c + " approve [id] | "
-                + c + " cancel [id] | " + c + " undo [id] | " + c + " status | " + c + " history | " + c + " link <code>",
+                + c + " cancel [id] | " + c + " undo [id] | " + c + " status | " + c + " history | " + c + " link <code> | "
+                + c + " trigger <name>",
                 false);
         return 1;
     }
@@ -203,6 +218,64 @@ public final class McaiMod implements DedicatedServerModInitializer {
         return 1;
     }
 
+    /** /ai trigger NAME: start an automation the server offers (the gateway checks who may). */
+    private int trigger(CommandContext<ServerCommandSource> ctx) {
+        ServerCommandSource src = ctx.getSource();
+        ServerPlayerEntity p = src.getPlayer();
+        String name = StringArgumentType.getString(ctx, "name").toLowerCase();
+        if (p == null) {
+            src.sendError(Text.literal("Only players can start triggers."));
+            return 0;
+        }
+        if (!TRIGGER.matcher(name).matches()) {
+            src.sendError(Text.literal("Trigger names are lowercase letters, digits, - and _."));
+            return 0;
+        }
+        JsonObject o = gameEvent("trigger", p.getUuid(), p.getName().getString());
+        o.addProperty("name", name);
+        gateway.post("/v1/mod/game-events", o).thenAccept(r -> runOnServer(() -> {
+            boolean ok = r.has("ok") && r.get("ok").getAsBoolean();
+            say(src, r.has("message") ? r.get("message").getAsString() : (ok ? "Started." : "Failed."), !ok);
+        }));
+        return 1;
+    }
+
+    private static JsonObject gameEvent(String type, UUID player, String name) {
+        JsonObject o = new JsonObject();
+        o.addProperty("type", type);
+        o.addProperty("event_id", UUID.randomUUID().toString());
+        o.addProperty("player_uuid", player.toString());
+        o.addProperty("player_name", name);
+        return o;
+    }
+
+    /** Called by the advancement mixin when a player completes an advancement (not recipes: they have no display). */
+    public static void onAdvancement(ServerPlayerEntity player, AdvancementEntry entry) {
+        McaiMod mod = instance;
+        if (mod == null || mod.gateway == null || player == null || entry.value().display().isEmpty()) {
+            return;
+        }
+        JsonObject o = gameEvent("advancement", player.getUuid(), player.getName().getString());
+        o.addProperty("advancement", entry.id().toString());
+        o.addProperty("title", entry.value().display().get().getTitle().getString());
+        mod.gateway.post("/v1/mod/game-events", o);
+    }
+
+    /** Players entering/leaving the areas of enabled area automations (checked twice a second). */
+    private void checkAreas(MinecraftServer s) {
+        List<AreaWatcher.Pos> positions = new ArrayList<>();
+        for (ServerPlayerEntity p : s.getPlayerManager().getPlayerList()) {
+            positions.add(new AreaWatcher.Pos(p.getUuid(), p.getName().getString(),
+                    p.getServerWorld().getRegistryKey().getValue().toString(), (int) Math.floor(p.getX()),
+                    (int) Math.floor(p.getY()), (int) Math.floor(p.getZ())));
+        }
+        for (AreaWatcher.Crossing c : areas.check(positions)) {
+            JsonObject o = gameEvent(c.enter() ? "area_enter" : "area_leave", c.player(), c.name());
+            o.addProperty("area", c.areaId());
+            gateway.post("/v1/mod/game-events", o);
+        }
+    }
+
     /** Join/leave events: compare the player list once a second (no extra Fabric API module needed). */
     private void trackPlayers(MinecraftServer s) {
         Map<UUID, String> now = new HashMap<>();
@@ -248,7 +321,17 @@ public final class McaiMod implements DedicatedServerModInitializer {
         o.addProperty("heap_max_mb", rt.maxMemory() / 1048576L);
         o.addProperty("uptime_s", (System.currentTimeMillis() - startedAt) / 1000L);
         o.addProperty("version", s.getVersion());
-        gateway.post("/v1/mod/heartbeat", o);
+        ServerWorld overworld = s.getOverworld();
+        JsonObject world = new JsonObject();
+        world.addProperty("time", overworld.getTimeOfDay());
+        world.addProperty("raining", overworld.isRaining());
+        world.addProperty("thundering", overworld.isThundering());
+        o.add("world", world);
+        gateway.post("/v1/mod/heartbeat", o).thenAccept(r -> {
+            if (r.has("areas")) {
+                areas.setAreas(AreaWatcher.parse(r.get("areas")));
+            }
+        });
     }
 
     private int info(CommandContext<ServerCommandSource> ctx, String path) {
@@ -274,6 +357,7 @@ public final class McaiMod implements DedicatedServerModInitializer {
                     case "rollback" -> builds.rollback(server, event);
                     case "prune" -> builds.prune(server, event);
                     case "preview" -> preview(event);
+                    case "broadcast" -> broadcast(event);
                     default -> message(event);
                 }
             } catch (RuntimeException e) {
@@ -307,6 +391,16 @@ public final class McaiMod implements DedicatedServerModInitializer {
         if (target != null && event.has("text")) {
             tell(target, event.get("text").getAsString(), event.has("level") && "error".equals(event.get("level").getAsString()));
         }
+    }
+
+    /** A message from an automation to everyone online (text only, shown with the [AI] prefix). */
+    private void broadcast(JsonObject event) {
+        if (!event.has("text")) {
+            return;
+        }
+        String clean = ChatText.clean(event.get("text").getAsString());
+        LOG.info("[AI] (broadcast) {}", clean);
+        server.getPlayerManager().broadcast(prefix().append(Text.literal(clean).formatted(Formatting.AQUA)), false);
     }
 
     private void preview(JsonObject event) {

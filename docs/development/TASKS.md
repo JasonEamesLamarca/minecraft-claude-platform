@@ -73,7 +73,20 @@ evidence named. Unverified items say so.
 | 4b: `mcai tui` (port of `mc-admin`: log + command line, players, AI queue, status bar) over one RPC session | ✅ | `test_tui.py` (headless); smoke test against the laptop stack |
 | Interactive Claude Code session from the console | ⚠️ | Not offered: it needs a PTY inside the platform, which ADR-0010 rules out. Revisit with a sandboxed design |
 
-## Phase 5 — Automation engine ⏳
+## Phase 5 — Automation engine ✅ (in-game checks pending)
+| Task | Status | Evidence |
+| --- | --- | --- |
+| Definitions (TOML/JSON): id, name, description, owner, trigger, conditions, actions from a fixed list, state, timezone, limits; strict validation (unknown keys, placeholders, ranges) | ✅ | `test_automation_defs.py` (44 tests) |
+| Scheduler: 5-field cron in IANA timezones (DST gap skipped, repeated hour once), epoch-aligned intervals, misfire policy | ✅ | `test_cron.py` (32 tests), schedule tests in `test_automations.py` |
+| Events: join/first join/leave, areas, advancements (mixin), `/ai trigger`, build results, server start, thresholds, world day/night/rain | ✅ | `test_automations.py`; `AreaWatcherTest` (mod); operational test (world event from the heartbeat) |
+| No duplicate runs (idempotency keys), restart without repeats, interrupted runs not repeated, retries resume at the failed action | ✅ | `test_restart_never_repeats_a_slot`, `test_run_interrupted_by_a_restart_is_not_repeated`, `test_retry_resumes_at_the_failed_action` |
+| Guards: loops/chains, runs per hour, cooldown, global runs/minute, AI USD/tokens per day, AI calls/hour, failure suspension, timeouts | ✅ | guard tests in `test_automations.py` |
+| Owner permissions re-checked each run; privileged automations need the owner; AI proposals need approval | ✅ | `test_owner_losing_a_permission_suspends`, `test_privileged_automation_needs_the_owner`, `test_ai_proposals_need_approval` |
+| `mcai automations …` (15 commands), file import over stdin, TUI panel (F7) | ✅ | `test_management_permissions` and other command tests; `test_cli.py`; `test_tui.py`; operational test |
+| 11 example automations | ✅ | `automation-examples/`; validated in `test_automation_defs.py` |
+| Operational: import over SSH, forbidden action refused, run reaches the game, night event, mixin loads | ✅ | `tests/operational/first_start.sh` (laptop, 17 Nov 2026) |
+| In game with a real client: area greeting, `/ai trigger tour`, advancement event, welcome on first join | ⏳ | **Needs maintainer** |
+| Real Claude: `mcai automations propose` with the configured credential | ⏳ | Mock verified; real call when the maintainer runs it (costs a few cents) |
 ## Phase 6 — Atlantis (original; Lite + Full; examples CLI) ⏳
 ## Phase 7 — Hardening + full CI (tests, buildx multi-arch, Trivy, SBOM, release) ⏳
 ## Phase 8 — Docs, diagrams, genuine screenshots ⏳

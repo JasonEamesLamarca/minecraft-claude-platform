@@ -50,3 +50,31 @@ def test_ssh_command_is_locked_down(cfg):
 def test_no_remote_configured(cfg):
     with pytest.raises(SystemExit, match="remote add"):
         mcai.main(["status"])
+
+
+def test_definition_files_are_sent_on_stdin(cfg, tmp_path, monkeypatch):
+    f = tmp_path / "welcome.toml"
+    f.write_text('id = "welcome"\n')
+    assert mcai.file_argument(["automations", "import", str(f), "--replace"]) == \
+        (["automations", "import", "--stdin", "--replace"], 'id = "welcome"\n')
+    assert mcai.file_argument(["auto", "validate", str(f)])[0] == ["auto", "validate", "--stdin"]
+    assert mcai.file_argument(["automations", "list"]) == (["automations", "list"], None)
+    with pytest.raises(SystemExit, match="Can't read"):
+        mcai.file_argument(["automations", "import", str(tmp_path / "missing.toml")])
+    big = tmp_path / "big.toml"
+    big.write_text("x" * (mcai.MAX_FILE + 1))
+    with pytest.raises(SystemExit, match="larger"):
+        mcai.file_argument(["automations", "import", str(big)])
+
+    mcai.main(["remote", "add", "home", "nas.local", "--host-key", KEY])
+    seen = {}
+
+    class Done:
+        returncode = 0
+
+    def fake_run(cmd, input=None):
+        seen["cmd"], seen["input"] = cmd, input
+        return Done()
+    monkeypatch.setattr(mcai.subprocess, "run", fake_run)
+    assert mcai.main(["automations", "import", str(f)]) == 0
+    assert shlex.split(seen["cmd"][-1]) == ["automations", "import", "--stdin"] and seen["input"] == b'id = "welcome"\n'

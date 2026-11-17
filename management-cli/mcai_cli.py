@@ -8,6 +8,7 @@ Needs Python 3.9+ and the OpenSSH client (`ssh`; built into Windows 10+ and macO
   mcai players list
   mcai players role Alex builder
   mcai logs -n 50          mcai logs --follow
+  mcai automations import welcome.toml     (definition files are read here and sent to the server)
   mcai help                (everything the server offers; what you may run depends on your role)
 
 Local commands: remote add|list|remove|default, version. Everything else runs on the server, which checks your
@@ -28,7 +29,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
+MAX_FILE = 64 * 1024
+FILE_COMMANDS = {("automations", "import"), ("automations", "validate"), ("auto", "import"), ("auto", "validate")}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 HOSTKEY_RE = re.compile(r"^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,3}$")
 
@@ -104,10 +107,13 @@ class Session:
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
         self.n = 0
 
-    def call(self, argv: list[str]) -> dict:
+    def call(self, argv: list[str], input: str | None = None) -> dict:
         self.n += 1
+        req = {"id": self.n, "argv": argv}
+        if input is not None:
+            req["input"] = input
         try:
-            self.proc.stdin.write(json.dumps({"id": self.n, "argv": argv}) + "\n")
+            self.proc.stdin.write(json.dumps(req) + "\n")
             self.proc.stdin.flush()
             line = self.proc.stdout.readline()
         except (BrokenPipeError, OSError):
@@ -123,6 +129,30 @@ class Session:
             self.proc.wait(timeout=5)
         except (OSError, subprocess.TimeoutExpired):
             self.proc.kill()
+
+
+def file_argument(argv: list[str]) -> tuple[list[str], str | None]:
+    """'automations import FILE' -> ('automations import --stdin', file text): the file is local, the server only
+    receives its content."""
+    if tuple(argv[:2]) not in FILE_COMMANDS:
+        return argv, None
+    rest = argv[2:]
+    paths = [a for a in rest if not a.startswith("-")]
+    if not paths:
+        return argv, None
+    path = Path(paths[0])
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        raise SystemExit(f"Can't read {path}: {e.strerror}") from None
+    if len(data) > MAX_FILE:
+        raise SystemExit(f"{path} is larger than {MAX_FILE // 1024} KB.")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SystemExit(f"{path} is not UTF-8 text.") from None
+    rest = [a for a in rest if a != paths[0]]
+    return argv[:2] + ["--stdin"] + rest, text
 
 
 # ------------------------------------------------------------------ local commands
@@ -215,9 +245,12 @@ def main(argv: list[str] | None = None) -> int:
         from mcai_tui import run as run_tui  # optional TUI, needs: pip install textual
         return run_tui(cfg, remote)
     name, r = cfg.remote(remote)
+    argv, text = file_argument(argv)
     cmd = ssh_command(cfg, name, r, (["--json"] if as_json else []) + (argv or ["help"]))
     try:
-        return subprocess.call(cmd)
+        if text is None:
+            return subprocess.call(cmd, stdin=subprocess.DEVNULL)
+        return subprocess.run(cmd, input=text.encode("utf-8")).returncode
     except KeyboardInterrupt:
         return 130
 

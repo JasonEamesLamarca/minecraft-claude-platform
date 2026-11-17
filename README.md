@@ -1,16 +1,17 @@
 # Minecraft AI Platform
 
-> **Status: pre-alpha, Phase 4.** What works today:
+> **Status: pre-alpha, Phase 5.** What works today:
 >
 > - a hardened Fabric server with backups and a setup wizard;
 > - **`/ai ask`** for questions;
 > - **`/ai build`**, with a preview, `/ai approve` and `/ai undo`;
 > - **roles** per player UUID (builder, operator, admin…);
 > - **remote administration** with the `mcai` command line over a locked-down SSH gateway, with a tamper-evident
->   audit log.
+>   audit log;
+> - **automations** on events or schedules, with 11 [examples](automation-examples/).
 >
 > Read [installation](docs/installation/README.md) and [administration](docs/administration/README.md) to get
-> started. Automations and Atlantis are still being built.
+> started. Atlantis is still being built.
 > [`docs/development/TASKS.md`](docs/development/TASKS.md) tracks what actually works.
 
 ## Quick start (what works now)
@@ -40,14 +41,14 @@ A self-hosted, Docker Compose–based platform that connects a Minecraft Java Ed
 - **Atlantis example.** An original underwater city that can be downloaded, verified and installed with
   `mcai examples install atlantis`.
 
-## Architecture (planned)
+## Architecture
 
 ```mermaid
 flowchart LR
   P[Player<br/>Minecraft client] -->|game protocol| MC[minecraft<br/>Fabric + mcai mod]
   MC <-->|authenticated local API| GW[gateway<br/>action schema + executor]
   GW <-->|jobs| AI[ai-worker<br/>Claude Code, restricted tools]
-  GW <--> AU[automation<br/>events + scheduler]
+  GW --- AU[automation engine<br/>events + scheduler]
   GW <--> DB[(state + audit<br/>SQLite)]
   A[Admin laptop<br/>mcai CLI / TUI] -->|SSH, keys only| SSH[ssh-gateway<br/>forced commands]
   SSH --> MG[management API<br/>RBAC]
@@ -61,7 +62,7 @@ Details: [`docs/architecture/overview.md`](docs/architecture/overview.md) and th
 
 | Path | Contents |
 | --- | --- |
-| `containers/` | One folder per service image (minecraft, claude, gateway, automation, management) |
+| `containers/` | One folder per service image (minecraft, claude, gateway, management) |
 | `minecraft-mod/` | Server-side Fabric mod (`/ai` commands, events to the gateway) |
 | `management-cli/` | `mcai` command-line client and terminal UI |
 | `automation-examples/` | Example automation definitions |

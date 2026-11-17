@@ -37,6 +37,9 @@ PERMISSIONS: dict[str, set[str]] = {
     "accounts.read": _ADMINS | {"auditor"},
     "accounts.manage": set(_ADMINS),
     "ips.read": set(_ADMINS),              # unmasked IP addresses in logs
+    "automations.read": set(_READERS),     # list, show, run history
+    "automations.manage": set(_ADMINS),    # create, change, enable, run, ask the AI for a proposal
+    "automations.approve": {"owner"},      # approve privileged automations (roles, world changes)
 }
 
 

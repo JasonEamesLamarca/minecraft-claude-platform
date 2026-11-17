@@ -28,6 +28,8 @@ HOST_KEY = DATA / "ssh_host_ed25519_key"
 AUTH_KEYS = DATA / "authorized_keys"
 RUNTIME = Path("/tmp/mcai-sshgw.json")          # settings for dispatch (sshd gives sessions a clean environment)
 MAX_COMMAND = 8192
+MAX_INPUT = 64 * 1024                           # a file sent with --stdin (automation definitions)
+MAX_RPC_LINE = MAX_INPUT + MAX_COMMAND + 1024
 
 LOG_PATTERNS = [
     (re.compile(r"^Accepted publickey for (\S+) from (\S+) port \d+ \S+: \S+ (SHA256:\S+)"), "accepted"),
@@ -172,6 +174,12 @@ def dispatch() -> int:
         print("Could not parse the command (unbalanced quotes?).", file=sys.stderr)
         return 2
     base = {"key": key, "source_ip": source_ip, "session": session}
+    if "--stdin" in argv:
+        data = sys.stdin.read(MAX_INPUT + 1)
+        if len(data) > MAX_INPUT:
+            print(f"Input larger than {MAX_INPUT // 1024} KB.", file=sys.stderr)
+            return 2
+        base["input"] = data
     if argv == ["rpc"]:
         return rpc(api, base, cfg.get("idle_timeout_s", 1800))
     as_json = bool(argv) and argv[0] == "--json"
@@ -229,7 +237,7 @@ def rpc(api: Api, base: dict, idle_timeout: int) -> int:
             line = sys.stdin.readline()
             if not line:
                 return 0
-            if len(line) > MAX_COMMAND:
+            if len(line) > MAX_RPC_LINE:
                 print(json.dumps({"id": None, "ok": False, "code": "usage", "text": "Request too long."}), flush=True)
                 continue
             try:
@@ -238,8 +246,11 @@ def rpc(api: Api, base: dict, idle_timeout: int) -> int:
             except (ValueError, KeyError, TypeError, AttributeError):
                 print(json.dumps({"id": None, "ok": False, "code": "usage", "text": "Bad request."}), flush=True)
                 continue
+            body = {**base, "argv": argv}
+            if isinstance(req.get("input"), str) and len(req["input"]) <= MAX_INPUT:
+                body["input"] = req["input"]
             try:
-                r = api.call("POST", "/v1/mgmt/run", {**base, "argv": argv})
+                r = api.call("POST", "/v1/mgmt/run", body)
             except OSError:
                 r = {"ok": False, "code": "unavailable", "text": "The management service is not reachable."}
             print(json.dumps({"id": rid, **r}), flush=True)

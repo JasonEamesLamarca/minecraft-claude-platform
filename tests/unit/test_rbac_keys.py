@@ -1,5 +1,6 @@
 """Roles, SSH key parsing and the SSH gateway's log parser / authorized_keys writer."""
 import base64
+import json
 import shutil
 import struct
 import subprocess
@@ -116,3 +117,41 @@ def test_authorized_keys_only_restricted_lines(tmp_path, monkeypatch):
     assert text == "restrict " + ED + "\n"
     assert (tmp_path / "authorized_keys").stat().st_mode & 0o777 == 0o600
     assert not sshgw.write_authorized_keys(["restrict " + ED])          # unchanged: not rewritten
+
+
+def _dispatch(monkeypatch, tmp_path, command, stdin_text):
+    import io
+    calls = []
+
+    class FakeApi:
+        def __init__(self, *a, **k):
+            pass
+
+        def call(self, method, path, body=None):
+            calls.append(body)
+            return {"ok": True, "text": "fine"}
+    monkeypatch.setattr(sshgw, "Api", FakeApi)
+    monkeypatch.setattr(sshgw, "_token", lambda: "t")
+    monkeypatch.setattr(sshgw, "RUNTIME", tmp_path / "none.json")
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", command)
+    src = tmp_path / "stdin.txt"                       # a real file: rpc mode select()s on it
+    src.write_text(stdin_text)
+    monkeypatch.setattr(sshgw.sys, "stdin", open(src) if command == "rpc" else io.StringIO(stdin_text))
+    return sshgw.dispatch(), calls
+
+
+def test_dispatch_stdin_input(monkeypatch, tmp_path):
+    rc, calls = _dispatch(monkeypatch, tmp_path, "automations import --stdin", 'id = "x"\n')
+    assert rc == 0 and calls[0]["input"] == 'id = "x"\n' and calls[0]["argv"] == ["automations", "import", "--stdin"]
+    rc, calls = _dispatch(monkeypatch, tmp_path, "automations list", "ignored")
+    assert rc == 0 and "input" not in calls[0], "stdin is only read with --stdin"
+    rc, calls = _dispatch(monkeypatch, tmp_path, "automations import --stdin", "x" * (sshgw.MAX_INPUT + 1))
+    assert rc == 2 and not calls
+
+
+def test_rpc_forwards_input(monkeypatch, tmp_path, capsys):
+    req = json.dumps({"id": 1, "argv": ["automations", "validate", "--stdin"], "input": "id = 'x'"}) + "\n"
+    rc, calls = _dispatch(monkeypatch, tmp_path, "rpc", req)
+    sent = [c for c in calls if c and "argv" in c]
+    assert rc == 0 and sent[0]["input"] == "id = 'x'"
+    assert json.loads(capsys.readouterr().out.splitlines()[0])["id"] == 1

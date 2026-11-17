@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Operational test: first-time deployment, AI ask/build, SSH administration (roles, revocation, isolation),
-# backup, restore and crash recovery, end to end.
+# automations, backup, restore and crash recovery, end to end.
 # Runs in a throw-away copy of the repo, so the real .env, secrets and data are never touched.
 # Needs Docker + internet (downloads Minecraft and mods). Takes ~3-6 minutes.
 # Usage: tests/operational/first_start.sh [workdir]     (workdir defaults to a new temp dir; it is left behind for inspection)
@@ -138,6 +138,36 @@ M audit verify | grep -q 'Audit chain intact'
 AUDIT | grep -q '"result": "accepted"'
 AUDIT | grep -q '"event": "account.key_revoked"'
 AUDIT | grep -q '"event": "mgmt.denied"'
+
+step "automations: definition file over SSH, manual run reaches the game, world event from the heartbeat"
+cat > .optest-auto.toml <<'TOML'
+id = "optest-hello"
+name = "Optest hello"
+enabled = true
+[trigger]
+event = "server.started"
+[[actions]]
+type = "broadcast"
+text = "optest automation ran"
+TOML
+M automations validate .optest-auto.toml | grep -q '^Valid'
+M automations import .optest-auto.toml | grep -q "Saved 'optest-hello' (version 1): enabled"
+M automations run optest-hello >/dev/null
+for _ in $(seq 1 15); do docker compose logs --since 1m minecraft | grep -q '(broadcast) optest automation ran' && break; sleep 1; done
+docker compose logs --since 1m minecraft | grep -q '(broadcast) optest automation ran'
+printf 'id = "optest-bad"\nname = "Bad"\n[trigger]\nevery = "1h"\n[[actions]]\ntype = "command"\ncommand = "op Eve"\n' > .optest-bad.toml
+set +e; out="$(M automations import .optest-bad.toml 2>&1)"; set -e
+[[ "$out" == *"can't run commands"* ]] || { echo "forbidden action accepted: $out"; exit 1; }
+M automations examples | grep -q 'promote-builders'
+M automations install night-reminder >/dev/null
+printf 'id = "optest-night"\nname = "Night"\nenabled = true\n[trigger]\nevent = "world.night_start"\n[[actions]]\ntype = "log"\ntext = "night fell"\n' > .optest-night.toml
+M automations import .optest-night.toml >/dev/null
+R "time set 1000"; sleep 35; R "time set 13500"            # the heartbeat (every 30 s) carries the world time
+for _ in $(seq 1 25); do AUDIT | grep -q '"message": "night fell"' && break; sleep 2; done
+AUDIT | grep -q '"message": "night fell"' || { echo "night automation did not run"; exit 1; }
+M automations runs | grep -q 'optest-night'
+if docker compose logs minecraft | grep -qi 'mixin.*\(error\|fail\)'; then echo "mixin problem in server log"; exit 1; fi
+echo "ok: automations imported, run, refused and triggered by a world event"
 
 step "isolation: only the game port and the SSH gateway (localhost) are published; the AI worker has no host mounts"
 bindings ssh-gateway | grep -q "\"HostIp\":\"127.0.0.1\",\"HostPort\":\"$SSH_PORT\"" \
