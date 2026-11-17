@@ -1,11 +1,17 @@
 # Minecraft AI Platform
 
-> **Status: pre-alpha, Phase 3.** What works today: a hardened Fabric server with backups and a setup wizard,
-> **`/ai ask`** for questions, and **`/ai build`**. Claude designs a build, you see a preview, and nothing is
-> placed until you `/ai approve` it; `/ai undo` restores the area. See
-> [installation](docs/installation/README.md) and [administration](docs/administration/README.md). Automations, the
-> SSH console and Atlantis are still being built. [`docs/development/TASKS.md`](docs/development/TASKS.md) tracks what
-> actually works.
+> **Status: pre-alpha, Phase 4.** What works today:
+>
+> - a hardened Fabric server with backups and a setup wizard;
+> - **`/ai ask`** for questions;
+> - **`/ai build`**, with a preview, `/ai approve` and `/ai undo`;
+> - **roles** per player UUID (builder, operator, admin…);
+> - **remote administration** with the `mcai` command line over a locked-down SSH gateway, with a tamper-evident
+>   audit log.
+>
+> Read [installation](docs/installation/README.md) and [administration](docs/administration/README.md) to get
+> started. Automations and Atlantis are still being built.
+> [`docs/development/TASKS.md`](docs/development/TASKS.md) tracks what actually works.
 
 ## Quick start (what works now)
 
@@ -14,6 +20,7 @@ git clone https://github.com/JasonEamesLamarca/minecraft-claude-platform.git
 cd minecraft-claude-platform
 scripts/setup.sh        # checks prerequisites, asks you to accept the Minecraft EULA, generates secrets, starts the server
 scripts/doctor.sh       # health and diagnostics
+management-cli/mcai status   # after `mcai remote add ...` printed by setup.sh
 ```
 
 A self-hosted, Docker Compose–based platform that connects a Minecraft Java Edition server to

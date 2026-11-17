@@ -114,3 +114,46 @@ def test_empty_credential_rejected(workdir):
     r = run_setup(workdir, *VALID[:-1], "api-key", stdin="\n")
     assert r.returncode != 0
     assert "No credential" in r.stderr
+
+
+# ------------------------------------------------------------------ SSH administration (Phase 4)
+def test_ssh_defaults_to_this_computer_only(workdir):
+    assert run_setup(workdir, *VALID).returncode == 0
+    env = read_env(workdir)
+    assert env["MCAI_SSH_BIND"] == "127.0.0.1" and env["MCAI_SSH_PORT"] == "2222"
+    assert mode(workdir / "secrets" / "management_token") == 0o600
+    assert len((workdir / "secrets" / "management_token").read_text().strip()) >= 32
+
+
+def test_ssh_owner_key_queued_for_the_gateway(workdir, tmp_path):
+    pub = tmp_path / "id_ed25519.pub"
+    pub.write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM0ZlbRxvJeha1Tyk7VWsHnGdq3m8m2Jw0zv1d8gB7cK me@laptop\n")
+    r = run_setup(workdir, *VALID, "--ssh-key", str(pub), "--ssh-bind", "0.0.0.0")
+    assert r.returncode == 0, r.stderr
+    queued = workdir / "data" / "gateway" / "bootstrap" / "owner.pub"
+    assert queued.read_text().startswith("ssh-ed25519 AAAA") and mode(queued) == 0o600
+    assert read_env(workdir)["MCAI_SSH_BIND"] == "0.0.0.0"
+
+
+@pytest.mark.parametrize("content,name,message", [
+    ("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n", "id_ed25519", "not a public key file"),
+    ("hello world\n", "id.pub", "doesn't look like an OpenSSH public key"),
+])
+def test_ssh_key_rejects_private_or_garbage(workdir, tmp_path, content, name, message):
+    f = tmp_path / name
+    f.write_text(content)
+    r = run_setup(workdir, *VALID, "--ssh-key", str(f))
+    assert r.returncode != 0 and message in r.stderr
+    assert not (workdir / "data" / "gateway" / "bootstrap" / "owner.pub").exists()
+
+
+def test_ssh_bind_validated(workdir):
+    r = run_setup(workdir, *VALID, "--ssh-bind", "everywhere; rm -rf /")
+    assert r.returncode != 0 and "--ssh-bind" in r.stderr
+
+
+def test_rerun_keeps_stored_credential(workdir):
+    assert run_setup(workdir, *VALID[:-2], "--ai-auth", "api-key", stdin="sk-ant-api03-test\n").returncode == 0
+    r = run_setup(workdir)                       # non-interactive re-run, no --ai-auth: nothing to type
+    assert r.returncode == 0, r.stderr
+    assert (workdir / "secrets" / "ai_credential").read_text() == "sk-ant-api03-test"

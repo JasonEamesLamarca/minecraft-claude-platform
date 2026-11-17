@@ -1,21 +1,20 @@
 # Architecture overview
 
-> Planned architecture as of Phase 0. Sections are marked **implemented** as each phase lands.
+> Implemented through Phase 4 (0.4.0). `automation` arrives in Phase 5.
 
 ## Components
 
 | Service | Responsibility | Trust level | Talks to |
 | --- | --- | --- | --- |
-| `minecraft` | itzg/minecraft-server (Fabric) + the `mcai` server mod. Game only. | Untrusted input (players) | gateway (mod → gateway API, token-authenticated) |
-| `gateway` | Player/request routing, RBAC checks, action schema validation, allowlisted executor, previews, snapshots/rollback, rate and budget limits, audit. **The only component that changes the world.** | Trusted core | minecraft (RCON on the internal network only), ai-worker, automation, state |
-| `ai-worker` | Runs Claude Code on demand with gateway MCP tools only. Holds the AI credential. | Semi-trusted (model output is untrusted) | gateway; egress to the AI provider only |
-| `automation` | Event triggers + scheduler, persistence, dedup, loop/rate/token guards | Trusted core | gateway |
-| `management` | Management API (RBAC enforced server-side) | Trusted core | gateway, state |
-| `ssh-gateway` | OpenSSH, keys only, `ForceCommand` → `mcai` dispatcher; no shell, PTY-less, no forwarding | Edge | management |
-| `state` | SQLite (WAL) on a volume: roles, identities, requests, automations, audit | Data | gateway, automation, management |
+| `minecraft` | itzg/minecraft-server (Fabric) + the `mcai` server mod: `/ai` commands, join/leave + health reports, previews, block placement, undo snapshots. **Implemented** | Untrusted input (players) | gateway (token-authenticated API) |
+| `gateway` | Identities (player UUIDs, accounts), roles, request routing, plan validation, approvals, rate and budget limits, management API, audit log, SQLite state. **The only component that decides.** **Implemented** | Trusted core | minecraft (mod API; RCON on the internal network for management commands), ai-worker, ssh-gateway |
+| `ai-worker` | Runs Claude Code per job with no tools (questions) or two MCP proposal tools (builds). Holds the AI credential. **Implemented** | Semi-trusted (model output is untrusted) | gateway; internet egress to the AI provider |
+| `ssh-gateway` | OpenSSH (unprivileged, keys only), `ForceCommand` → dispatcher; no shell, PTY, forwarding or files. **Implemented** | Edge | gateway management API |
+| `backup` | itzg/mc-backup: scheduled world backups. **Implemented** | Data | minecraft (RCON, read-only data) |
+| `automation` | Event triggers + scheduler, dedup, loop/rate guards (Phase 5) | Trusted core | gateway |
 
-Combining gateway, automation and management into one process is allowed if it keeps the installation simpler. If
-that happens, it will be recorded in an ADR. The trust boundaries above stay the same either way.
+The management API runs inside the gateway (ADR-0010), not as a separate service. The trust boundaries stay the
+same: the SSH gateway only authenticates and forwards, and the gateway authorizes every command.
 
 ## High-level flow
 
@@ -41,10 +40,11 @@ sequenceDiagram
 
 ## Networks and ports
 
-- `internal` (Docker bridge, `internal: true`) connects minecraft ↔ gateway ↔ automation ↔ management ↔ state.
+- `internal` (Docker bridge, `internal: true`) connects minecraft ↔ gateway ↔ ai-worker ↔ ssh-gateway ↔ backup.
   RCON exists only here.
 - `ai-egress` connects ai-worker ↔ internet (AI provider) and ai-worker ↔ gateway.
-- Published to the host: the Minecraft game port and the SSH gateway port. Nothing else.
+- `edge` carries the published ports: the Minecraft game port and the SSH gateway port (127.0.0.1 unless the
+  owner chooses otherwise). Nothing else is published.
 
 ## Further reading
 

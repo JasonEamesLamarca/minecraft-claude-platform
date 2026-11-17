@@ -1,10 +1,13 @@
 package dev.mcai.mod;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -23,8 +26,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Server-side entrypoint. Registers the /ai command (name configurable), relays gateway messages to players,
- * shows build previews and executes approved builds. Authorization is decided by the gateway (authoritative);
- * the mod reports the caller's vanilla permission level and enforces a minimum level for the command itself.
+ * shows build previews and executes approved builds, and reports joins/leaves and server health. Authorization
+ * is decided by the gateway from the player's UUID and role; the mod only enforces a minimum vanilla permission
+ * level for the command itself.
  */
 public final class McaiMod implements DedicatedServerModInitializer {
     static final Logger LOG = LoggerFactory.getLogger("mcai");
@@ -35,6 +39,8 @@ public final class McaiMod implements DedicatedServerModInitializer {
     private GatewayClient gateway;
     private BuildExecutor builds;
     private volatile MinecraftServer server;
+    private final Map<UUID, String> online = new HashMap<>();
+    private long startedAt;
 
     @Override
     public void onInitializeServer() {
@@ -50,11 +56,20 @@ public final class McaiMod implements DedicatedServerModInitializer {
         CommandRegistrationCallback.EVENT.register((dispatcher, registries, env) -> register(dispatcher));
         ServerLifecycleEvents.SERVER_STARTED.register(s -> {
             server = s;
+            startedAt = System.currentTimeMillis();
             gateway.start(this::deliver);
             LOG.info("[mcai] ready: /{} -> {}", config.commandName(), config.gatewayUrl());
         });
         ServerLifecycleEvents.SERVER_STOPPING.register(s -> gateway.stop());
-        ServerTickEvents.END_SERVER_TICK.register(s -> builds.tick(s));
+        ServerTickEvents.END_SERVER_TICK.register(s -> {
+            builds.tick(s);
+            if (s.getTicks() % 20 == 0) {
+                trackPlayers(s);
+            }
+            if (s.getTicks() % 600 == 100) {
+                heartbeat(s);
+            }
+        });
     }
 
     private void register(CommandDispatcher<ServerCommandSource> dispatcher) {
@@ -72,7 +87,9 @@ public final class McaiMod implements DedicatedServerModInitializer {
                 .then(CommandManager.literal("ask").then(CommandManager.argument("text", StringArgumentType.greedyString())
                         .executes(c -> request(c, "ask"))))
                 .then(CommandManager.literal("build").then(CommandManager.argument("text", StringArgumentType.greedyString())
-                        .executes(c -> request(c, "build"))));
+                        .executes(c -> request(c, "build"))))
+                .then(CommandManager.literal("link").then(CommandManager.argument("code", StringArgumentType.word())
+                        .executes(this::link)));
         for (String action : new String[] {"approve", "cancel", "undo"}) {
             root.then(CommandManager.literal(action)
                     .executes(c -> decide(c, action, null))
@@ -94,11 +111,12 @@ public final class McaiMod implements DedicatedServerModInitializer {
     private int help(CommandContext<ServerCommandSource> ctx) {
         String c = "/" + config.commandName();
         say(ctx.getSource(), c + " ask <question> | " + c + " build <description> | " + c + " approve [id] | "
-                + c + " cancel [id] | " + c + " undo [id] | " + c + " status | " + c + " history", false);
+                + c + " cancel [id] | " + c + " undo [id] | " + c + " status | " + c + " history | " + c + " link <code>",
+                false);
         return 1;
     }
 
-    /** Identity, vanilla permission level and position of the caller. Console: level 4, world spawn. */
+    /** Identity and position of the caller (the gateway looks up the role by UUID). Console: world spawn. */
     private JsonObject caller(ServerCommandSource src) {
         JsonObject o = new JsonObject();
         JsonObject ctx = new JsonObject();
@@ -110,7 +128,6 @@ public final class McaiMod implements DedicatedServerModInitializer {
             BlockPos spawn = src.getServer().getOverworld().getSpawnPos();
             o.addProperty("player_uuid", CONSOLE.toString());
             o.addProperty("player_name", "Server");
-            o.addProperty("op_level", 4);
             ctx.addProperty("dimension", "minecraft:overworld");
             ctx.addProperty("x", spawn.getX());
             ctx.addProperty("y", spawn.getY());
@@ -119,7 +136,6 @@ public final class McaiMod implements DedicatedServerModInitializer {
         } else {
             o.addProperty("player_uuid", p.getUuid().toString());
             o.addProperty("player_name", p.getName().getString());
-            o.addProperty("op_level", src.getServer().getPermissionLevel(p.getGameProfile()));
             ctx.addProperty("dimension", p.getServerWorld().getRegistryKey().getValue().toString());
             ctx.addProperty("x", (int) Math.floor(p.getX()));
             ctx.addProperty("y", (int) Math.floor(p.getY()));
@@ -171,6 +187,70 @@ public final class McaiMod implements DedicatedServerModInitializer {
         return 1;
     }
 
+    private int link(CommandContext<ServerCommandSource> ctx) {
+        ServerCommandSource src = ctx.getSource();
+        JsonObject body = caller(src);
+        if (body == null || src.getPlayer() == null) {
+            src.sendError(Text.literal("Only players can link an account."));
+            return 0;
+        }
+        body.remove("context");
+        body.addProperty("code", StringArgumentType.getString(ctx, "code").toLowerCase());
+        gateway.post("/v1/mod/link", body).thenAccept(r -> runOnServer(() -> {
+            boolean ok = r.has("ok") && r.get("ok").getAsBoolean();
+            say(src, r.has("message") ? r.get("message").getAsString() : (ok ? "Linked." : "Failed."), !ok);
+        }));
+        return 1;
+    }
+
+    /** Join/leave events: compare the player list once a second (no extra Fabric API module needed). */
+    private void trackPlayers(MinecraftServer s) {
+        Map<UUID, String> now = new HashMap<>();
+        for (ServerPlayerEntity p : s.getPlayerManager().getPlayerList()) {
+            now.put(p.getUuid(), p.getName().getString());
+        }
+        for (Map.Entry<UUID, String> e : now.entrySet()) {
+            if (!online.containsKey(e.getKey())) {
+                playerEvent("join", e.getKey(), e.getValue());
+            }
+        }
+        for (Map.Entry<UUID, String> e : online.entrySet()) {
+            if (!now.containsKey(e.getKey())) {
+                playerEvent("leave", e.getKey(), e.getValue());
+            }
+        }
+        online.clear();
+        online.putAll(now);
+    }
+
+    private void playerEvent(String event, UUID id, String name) {
+        JsonObject o = new JsonObject();
+        o.addProperty("event", event);
+        o.addProperty("player_uuid", id.toString());
+        o.addProperty("player_name", name);
+        gateway.post("/v1/mod/players", o);
+    }
+
+    /** Server health for 'mcai status': tick time, heap, online players (also repairs missed join/leave events). */
+    private void heartbeat(MinecraftServer s) {
+        JsonObject o = new JsonObject();
+        JsonArray players = new JsonArray();
+        for (ServerPlayerEntity p : s.getPlayerManager().getPlayerList()) {
+            JsonObject e = new JsonObject();
+            e.addProperty("uuid", p.getUuid().toString());
+            e.addProperty("name", p.getName().getString());
+            players.add(e);
+        }
+        Runtime rt = Runtime.getRuntime();
+        o.add("players", players);
+        o.addProperty("mspt", s.getAverageTickTime());
+        o.addProperty("heap_used_mb", (rt.totalMemory() - rt.freeMemory()) / 1048576L);
+        o.addProperty("heap_max_mb", rt.maxMemory() / 1048576L);
+        o.addProperty("uptime_s", (System.currentTimeMillis() - startedAt) / 1000L);
+        o.addProperty("version", s.getVersion());
+        gateway.post("/v1/mod/heartbeat", o);
+    }
+
     private int info(CommandContext<ServerCommandSource> ctx, String path) {
         ServerCommandSource src = ctx.getSource();
         JsonObject who = caller(src);
@@ -192,6 +272,7 @@ public final class McaiMod implements DedicatedServerModInitializer {
                 switch (type) {
                     case "execute" -> builds.execute(server, event);
                     case "rollback" -> builds.rollback(server, event);
+                    case "prune" -> builds.prune(server, event);
                     case "preview" -> preview(event);
                     default -> message(event);
                 }

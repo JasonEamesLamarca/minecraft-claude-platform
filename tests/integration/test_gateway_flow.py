@@ -71,8 +71,11 @@ class Stack:
         self.httpd.shutdown()
 
     def audit(self):
-        p = self.settings.data_dir / "audit" / "audit.jsonl"
-        return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
+        return self.gw.store.audit_records(limit=1_000_000)
+
+    def role(self, player_uuid, name, role):
+        self.gw.store.player_seen(player_uuid, name)
+        self.gw.store.set_player_role(player_uuid, role)
 
 
 @pytest.fixture
@@ -243,7 +246,7 @@ def test_model_reply_sanitized_before_delivery(tmp_path):
 def test_audit_log_has_no_request_text_by_default(stack):
     stack.ask("my secret question")
     stack.events_until(1)
-    raw = (stack.settings.data_dir / "audit" / "audit.jsonl").read_text()
+    raw = "".join(p.read_text() for p in stack.gw.store.audit_files())
     assert "my secret question" not in raw
     events = [a["event"] for a in stack.audit()]
     assert "request.accepted" in events and "request.done" in events

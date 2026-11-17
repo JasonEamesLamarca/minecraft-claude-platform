@@ -1,4 +1,4 @@
-# Threat model (v2, Phase 3)
+# Threat model (v3, Phase 4)
 
 STRIDE-style model of the architecture. **Status** says what is implemented and tested, and what is still planned.
 The model is reviewed at every phase gate.
@@ -44,7 +44,7 @@ actions).
 | T8 | SSH brute force / shell escape | 5 | Keys only, no passwords, `ForceCommand`, no PTY/forwarding/agent, `MaxAuthTries`, idle timeout, audit, key revocation |
 | T9 | Privilege escalation via management API | 6 | Server-side RBAC per action; role changes are themselves privileged + audited; owner role not assignable via API by non-owners |
 | T10 | Malicious example (path traversal, zip bomb, script, oversized) | 7 | URL allowlist, size caps, streaming hash verification, no archive extraction outside a temp dir, no script execution, schema-validated manifest, bounds check before placement |
-| T11 | Docker socket abuse | all | No socket in untrusted containers; lifecycle ops via a narrowly scoped helper with explicit authorization (design in Phase 4) |
+| T11 | Docker socket abuse | all | No socket in any container. Minecraft restarts via RCON `stop` + Docker restart policy; stack lifecycle, restore and upgrades stay host-only scripts (ADR-0010) |
 | T12 | RCON exposure | 1 | RCON on internal network only, random password, never published |
 | T13 | Supply-chain compromise | — | Images pinned by digest, actions pinned by SHA, Dependabot, Trivy, SBOM, least-privilege workflow tokens |
 | T14 | Sensitive data in logs/repo | — | Structured logs with redaction; gitleaks + private deny-list in pre-commit and CI |
@@ -82,3 +82,28 @@ New residual risks (Phase 3):
   important places.
 - Undo snapshots are as sensitive as the world itself (they include container contents) and are stored in it.
 - Interim authorization relies on vanilla op levels until RBAC (Phase 4).
+
+## Implementation status (Phase 4: management, roles, audit)
+
+| # | Status | Tests |
+| --- | --- | --- |
+| T6 | **Implemented:** roles are stored per player UUID. Op levels, names or roles claimed by the mod grant nothing. `MC_OWNER` becomes owner once, at first join, and only in online mode | `test_claims_from_the_mod_are_ignored`, `test_roles_by_uuid_not_name`, `test_owner_bootstrap_by_name_once`, `test_no_owner_bootstrap_in_offline_mode` |
+| T8 | **Implemented:** OpenSSH, unprivileged, in a read-only container with every capability dropped. Keys only, `ForceCommand`, no PTY, forwarding, agent, X11, tunnels or subsystems, `MaxAuthTries 3`, `LoginGraceTime 20`, `MaxStartups`, client-alive and RPC idle timeouts. Bound to 127.0.0.1 by default. Every authentication result is audited with fingerprint and source IP. Revocation works immediately at the API and within 5 s at sshd. Clients pin the host key | `test_ssh_gateway_is_locked_down`, `test_authorized_keys_only_restricted_lines`, `test_authorized_keys_restricted_and_follow_revocation`, `test_cli.py`, operational test (no PTY, no port forward, no shell, revoked key refused by sshd); manual probes on 17 Nov 2026 (shell, `-tt bash`, `;`-injection, `-L` forward, sftp, password, root user, unknown key: all refused) |
+| T9 | **Implemented:** every management command checks its permission in the gateway. You can only change people below you, and only to roles below yours. Nobody changes their own role, owners are made only on the host, and every denial is audited | `test_admin_escalation_attempts_fail` (5 cases), `test_auditor_is_read_only`, `test_operator_moderates_but_cannot_assign_roles`, `test_operator_cannot_kick_higher_role`, `test_may_assign` (11 cases) |
+| T11 | **Implemented:** no Docker socket anywhere. `mcai server restart` = RCON `stop` + Docker restart policy | `test_no_docker_socket_mounted`, operational test mounts check; restart verified on the laptop (17 Nov 2026) |
+| T12 | RCON stays internal; now also used by the gateway for allowlisted commands. Console commands are owner-only and cleaned to a single line | `test_console_command_is_owner_only_and_single_line` |
+| T14 | **Implemented:** the audit log is one file per UTC day, hash-chained (`mcai audit verify`), mode 600, with retention (`AUDIT_RETENTION_DAYS`). Keys, tokens and passwords are never recorded. IP addresses in server logs are masked below admin | `test_audit_chain_detects_tampering`, `test_audit_chain_survives_a_second_writer`, `test_audit_never_contains_keys_or_tokens`, `test_logs_mask_ips_except_for_admins` |
+
+New residual risks (Phase 4):
+- The SSH dispatcher runs as the same Unix user as sshd. A flaw in OpenSSH's forced-command handling would expose
+  the management token and the SSH host key. It would not expose world data, the RCON password or the AI
+  credential, which aren't in that container.
+- The management token lets the SSH gateway send any authenticated account's commands to the gateway, while the
+  gateway checks each key. A compromised SSH gateway container could replay keys it has seen, so it can act as
+  any account that has logged in.
+- The gateway now holds the RCON password (full console). The gateway is the trust core (it already orders
+  builds). It has no internet route and only reads, never writes, the logs and backups.
+- The hash chain detects edits by anyone without write access to the gateway's data, and accidental damage. An
+  attacker who controls the host can rewrite the whole chain. For that case, export the audit log off the host
+  regularly (`mcai audit show --format jsonl`).
+- Source IPs of host-local SSH connections show the Docker bridge address.

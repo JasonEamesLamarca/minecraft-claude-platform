@@ -1,0 +1,41 @@
+# SSH gateway: keys only, every login runs the management dispatcher, no shell, PTY, forwarding or files.
+Port 2222
+HostKey /data/ssh_host_ed25519_key
+PidFile /tmp/sshd.pid
+AuthorizedKeysFile /data/authorized_keys
+StrictModes yes
+
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+HostbasedAuthentication no
+UsePAM no
+PermitRootLogin no
+PermitEmptyPasswords no
+AllowUsers mcai
+
+ForceCommand /usr/local/bin/mcai-server
+ExposeAuthInfo yes
+PermitTTY no
+PermitUserRC no
+PermitUserEnvironment no
+AllowTcpForwarding no
+AllowStreamLocalForwarding no
+AllowAgentForwarding no
+X11Forwarding no
+PermitTunnel no
+GatewayPorts no
+DisableForwarding yes
+
+# Brute force and dead sessions
+MaxAuthTries 3
+MaxSessions 4
+MaxStartups 10:30:60
+LoginGraceTime 20
+ClientAliveInterval 60
+ClientAliveCountMax 3
+
+# VERBOSE logs key fingerprints (audited); nothing secret is logged
+LogLevel VERBOSE
+PrintMotd no
+Banner none

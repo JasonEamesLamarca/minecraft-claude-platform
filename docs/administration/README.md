@@ -1,7 +1,107 @@
 # Administration
 
-> Phase 1: these tasks use scripts and the server console. The `mcai` SSH console (Phase 4) will replace most of
-> them with role-checked commands.
+> Day-to-day administration works remotely with the `mcai` command line over SSH, and every command is checked
+> against your role: see [Remote administration and roles](#remote-administration-and-roles). The scripts and
+> `docker compose` commands below are for the host itself: installing, upgrading, backups and restores.
+
+## Remote administration and roles
+
+### Connect
+
+`scripts/setup.sh` asks for your SSH **public** key (default `~/.ssh/id_ed25519.pub`; create one with
+`ssh-keygen -t ed25519`) and registers it for the `owner` account. At the end it prints the command to run on
+the computer you administer from. That computer needs Python 3.9+ and the OpenSSH client, which is built into
+Windows 10+, macOS and most Linux systems.
+
+```bash
+management-cli/mcai remote add home nas.local --port 2222 --host-key 'ssh-ed25519 AAAA... mcai-ssh-gateway'
+management-cli/mcai whoami
+management-cli/mcai status
+```
+
+On Windows use `management-cli\mcai.cmd`. Alternatively, `pip install ./management-cli` installs a `mcai` command.
+
+The host key is **pinned**: if the server's key ever changes, `mcai` refuses to connect instead of trusting the
+new one. To see the key on the server, run
+`docker compose exec ssh-gateway ssh-keygen -lf /data/ssh_host_ed25519_key.pub`.
+
+By default SSH listens on this computer only (`MCAI_SSH_BIND=127.0.0.1`). Re-run the wizard and answer "yes" to
+"Allow administration from other computers" to listen on your network. **Don't** forward port 2222 on your
+router: use a VPN to administer from outside.
+
+### Commands
+
+`mcai help` lists everything, and `mcai help <command>` shows the details. The most used:
+
+| Task | Command | Needs |
+| --- | --- | --- |
+| Server, players, AI and backups at a glance | `mcai status` | anyone |
+| Players with role and last seen; one player; sessions | `mcai players list` / `info <name>` / `sessions [name]` | auditor, operator+ |
+| Change a player's role | `mcai players role Alex builder` | admin+ |
+| Whitelist | `mcai whitelist list` / `add <name>` / `remove <name>` | operator+ (list: auditor too) |
+| Kick, broadcast | `mcai players kick <name> [reason]`, `mcai say <text>` | operator+ |
+| Server log (IPs masked below admin) | `mcai logs -n 100 [--grep text]`, `mcai logs --follow` | auditor, operator+ |
+| Save / restart Minecraft | `mcai server save`, `mcai server restart --yes` | admin+ |
+| Raw console command | `mcai server command <command>` | owner |
+| AI: history, pending, details | `mcai ai history`, `mcai ai pending`, `mcai ai show <id>` | auditor, operator+ |
+| AI: approve, cancel, undo any build | `mcai ai approve|cancel|undo <id>` | operator+ |
+| AI: switch off/on, daily budget | `mcai ai disable`, `mcai ai enable`, `mcai ai budget 5.00` | admin+ |
+| Audit history, export, integrity | `mcai audit show --since 7d [--event role.] [--format csv]`, `mcai audit verify` | auditor, admin+ |
+| Accounts and SSH keys | `mcai accounts list|add|role|disable|enable|keys|key-add|key-revoke` | admin+ (own keys: anyone) |
+| Backups | `mcai backups list` | auditor, operator+ |
+
+Add `--json` before the command for machine-readable output, for example `mcai --json status`.
+
+**Full-screen console:** `pip install textual`, then run `mcai tui`. It has a live log with a command line, the
+players (Enter for actions) and the AI requests waiting for approval. It is the successor of the earlier
+`mc-admin` console. Unlike that console, it never gets a shell on the host: every action is an `mcai` command
+checked against your role. Interactive Claude Code sessions on the server are not offered over SSH, because
+that would need a terminal (PTY) inside the platform.
+
+### Roles
+
+| Role | In game | Management (SSH) |
+| --- | --- | --- |
+| **owner** | everything | everything, including raw console commands |
+| **admin** | build, decide on anyone's builds | roles and accounts below admin, restart, AI settings, audit |
+| **operator** | build, decide on anyone's builds | whitelist, kick, say, logs, AI history and decisions |
+| **builder** | `/ai ask`, `/ai build` (own builds) | status |
+| **player** | `/ai ask` | status |
+| **auditor** | nothing | read-only: status, players, logs, AI history, audit, accounts |
+
+- **Players are identified by UUID.** A player gets the `player` role at their first join. Change it with
+  `mcai players role <name> <role>`. Renaming a Minecraft account keeps the role.
+- **The owner** is the Minecraft name in `MC_OWNER`: it becomes `owner` at its first join (online mode only).
+- **Rules for changing roles:** you can change only people below you, and only to roles below yours. Nobody
+  changes their own role. Making someone owner (or demoting an owner) is done on the host:
+  `scripts/set-role.sh player <name> owner` or `scripts/set-role.sh account <name> owner`.
+- **Accounts** are for people who administer. Give each person their own account and key:
+  `mcai accounts add alice operator ssh-ed25519 AAAA... alice@laptop`. The key works within 5 seconds. Revoke a lost key with
+  `mcai accounts key-revoke SHA256:...`; it stops working within seconds. Revoked keys can't be added again.
+- **Linking** (`mcai link`, then `/ai link <code>` in game) records which player an account belongs to. It grants
+  nothing.
+- **Vanilla ops** are separate. The ops list is still reset to just the owner at every start, and the platform's
+  roles never hand out `/op`.
+
+### Recovery: lost owner key
+
+On the server host, run `scripts/setup.sh --ssh-key /path/to/new_key.pub`, or copy the key to
+`data/gateway/bootstrap/owner.pub` and run `docker compose restart gateway`. The gateway adds the key to the
+`owner` account and re-enables it. Access to the host is the root of trust.
+
+### Audit
+
+Everything administrative ends up in `data/gateway/audit/audit-YYYY-MM-DD.jsonl` (UTC, one JSON object per line,
+mode 600):
+
+- SSH logins (accepted and rejected, with key fingerprint and source IP);
+- management commands that change something, and every refused one;
+- role, account and key changes;
+- player joins and leaves;
+- AI requests, approvals, builds and undos.
+
+Each record contains a hash of the previous one, so `mcai audit verify` notices edits and deletions. Files older
+than `AUDIT_RETENTION_DAYS` (default 365) are deleted. Back up `data/gateway/` if you need to keep them longer.
 
 ## Server console
 
@@ -25,8 +125,8 @@ The server stores players by **UUID** in `data/minecraft/whitelist.json` and `op
 from `.env` is added to the whitelist again, and players you added are kept.
 
 **Operators:** the operator list is **reset to just the owner at every start**. An `op` given in-game lasts only until
-the next restart. This is deliberate: operators can run every command. Finer-grained roles arrive with the
-platform's RBAC in Phase 4.
+the next restart. This is deliberate: operators can run every command. Use the platform's roles instead
+(`mcai players role`).
 
 ## Backups
 
@@ -83,7 +183,8 @@ usually names the cause: an unaccepted EULA, a mod that doesn't match the Minecr
 ## Changing settings
 
 Edit `.env`, or re-run `scripts/setup.sh`, then run `docker compose up -d`, which recreates only the containers whose
-settings changed. To add mods, append `project:versionId` entries from Modrinth to `MC_MODS`. Pin exact
+settings changed. After rebuilding the mod (`scripts/build-mod.sh`), re-run `scripts/setup.sh` so the new jar's
+checksum is recorded and `up` restarts the server with it. To add mods, append `project:versionId` entries from Modrinth to `MC_MODS`. Pin exact
 versions so updates stay deliberate.
 
 ## AI assistant (`/ai`)
@@ -126,9 +227,9 @@ approves them (below). It has no other tools: no commands, no files, no web acce
 
 `/ai history` lists your last 5 requests with their ids and states.
 
-**Who can build:** players with permission level `AI_BUILD_MIN_OP_LEVEL` (default 4). The ops list is reset to
-the owner at every start, so by default that's the owner and the server console. To let a trusted builder use it
-temporarily, lower the level or give them op. Proper roles arrive in Phase 4.
+**Who can build:** players with the `builder` role or higher: `mcai players role Alex builder`. Builders approve,
+cancel and undo their own builds. Operators and above can do that for anyone's builds, in game or with
+`mcai ai approve|cancel|undo <id>`.
 
 **Limits** (`.env`, defaults): 40,000 blocks, a 48×64×48 box, within 64 blocks of the player, and $1.00 per
 design. TNT, command blocks, lava, fire, bedrock, spawners, portals and similar blocks are always refused.
@@ -143,14 +244,16 @@ someone's base:
 The gateway reads it for every build. If the file has a syntax error, every build is refused until it is fixed.
 
 **Undo snapshots** are stored in `data/minecraft/world/generated/mcai/structures/undo/<id>.nbt`. They are part of
-the world, so backups include them.
+the world, so backups include them. A snapshot is deleted when its build is undone, and after
+`AI_UNDO_KEEP_DAYS` (default 7). After that the build can no longer be undone.
 
 **Where to look:**
 - `docker compose logs ai-worker`: one JSON line per job, with outcome, cost and duration. The question text
   isn't logged.
 - `docker compose logs gateway`: the gateway's service log.
-- `data/gateway/audit/audit.jsonl`: accepted, rejected and failed requests and failed authentications, with UTC
-  timestamps. The request text is stored only as a length and hash unless `AUDIT_LOG_TEXT=true`.
+- `mcai audit show --event request.` (or `data/gateway/audit/audit-*.jsonl`): accepted, rejected and failed
+  requests and failed authentications, with UTC timestamps. The request text is stored only as a length and hash
+  unless `AUDIT_LOG_TEXT=true`.
 - `data/gateway/gateway.db`: request history (SQLite).
 
 **Troubleshooting:**

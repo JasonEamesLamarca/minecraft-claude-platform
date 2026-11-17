@@ -27,6 +27,7 @@ import net.minecraft.util.Clearable;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3i;
+import net.minecraft.util.WorldSavePath;
 
 /**
  * Places approved build plans through the game's own API, a limited number of blocks per tick, after saving a
@@ -168,6 +169,28 @@ public final class BuildExecutor {
             report.addProperty("error", "error while restoring");
         }
         reporter.accept(id, report);
+    }
+
+    /** Delete undo snapshots the gateway no longer needs (undone builds, or older than the undo window). */
+    public void prune(MinecraftServer server, JsonObject event) {
+        StructureTemplateManager mgr = server.getStructureTemplateManager();
+        java.nio.file.Path dir = server.getSavePath(WorldSavePath.GENERATED).resolve("mcai").resolve("structures")
+                .resolve("undo");
+        for (JsonElement el : event.getAsJsonArray("request_ids")) {
+            String id = el.getAsString();
+            if (!id.matches("[0-9a-f]{6,12}")) {        // ids become file names: never accept anything else
+                continue;
+            }
+            mgr.unloadTemplate(snapshotId(id));
+            try {
+                java.nio.file.Files.deleteIfExists(dir.resolve(id + ".nbt"));
+                JsonObject report = new JsonObject();
+                report.addProperty("status", "pruned");
+                reporter.accept(id, report);
+            } catch (java.io.IOException e) {
+                McaiMod.LOG.warn("[mcai] could not delete undo snapshot {}: {}", id, e.toString());
+            }
+        }
     }
 
     /** Called every server tick. */

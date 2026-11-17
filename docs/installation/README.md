@@ -1,7 +1,7 @@
 # Installation
 
-> Phase 2 status: this installs the **Minecraft server with backups and the `/ai ask` assistant**. Automations,
-> the SSH console and AI-assisted building arrive in later phases. Everything below was run on the "verified" setup in the table, unless marked otherwise.
+> Phase 4 status: this installs the **Minecraft server with backups, `/ai ask` and `/ai build`, roles, and remote
+> administration over SSH**. Automations and the Atlantis example arrive in later phases. Everything below was run on the "verified" setup in the table, unless marked otherwise.
 
 ## Supported hosts
 
@@ -56,15 +56,21 @@ It will:
    - or **skip**: `/ai` then replies that the AI isn't set up.
 
    The credential goes to `secrets/ai_credential`, never `.env`, and only the AI worker container can read it.
-7. Build the server mod in a container on first run (no Java needed; a few minutes). Then validate
-   `compose.yaml` and offer to start everything.
+7. Set up **SSH administration**:
+   - Ask whether other computers on your network may connect. The default is no: only this computer.
+   - Ask for your SSH **public** key file (default `~/.ssh/id_ed25519.pub`; create one with
+     `ssh-keygen -t ed25519`). It becomes the `owner` account's key.
+8. Build the server mod in a container on first run (no Java needed; a few minutes). Then validate
+   `compose.yaml` and offer to start everything. After starting, it prints the `mcai remote add ...` line that
+   connects your computer, including the server's host key.
 
 `.env` and `secrets/` are git-ignored. Re-running the wizard keeps your existing secrets and settings.
 
 Non-interactive use (scripts, CI):
 
 ```bash
-scripts/setup.sh --non-interactive --accept-eula --owner YourName --port 25565 --memory 4G --ai-auth none --start
+scripts/setup.sh --non-interactive --accept-eula --owner YourName --port 25565 --memory 4G --ai-auth none \
+  --ssh-key ~/.ssh/id_ed25519.pub --ssh-bind 127.0.0.1 --start
 ```
 
 ## 4. Start and check
@@ -76,7 +82,11 @@ scripts/doctor.sh             # prerequisites, config, health, resource use, rec
 ```
 
 The first start downloads Minecraft, the Fabric loader and Fabric API, and builds the gateway and AI worker
-images. This takes a few minutes. Four services run: `minecraft`, `backup`, `gateway` and `ai-worker`.
+images. This takes a few minutes. Five services run: `minecraft`, `backup`, `gateway`, `ai-worker` and
+`ssh-gateway`.
+
+**Test administration:** `management-cli/mcai status` (after the `mcai remote add` line from the wizard). See
+[Remote administration and roles](../administration/README.md#remote-administration-and-roles).
 
 **Test the AI:** in game, type `/ai ask how do I make a torch?`. Without a credential, set `AI_PROVIDER=mock` in
 `.env` and run `docker compose up -d` to get canned answers.
@@ -98,6 +108,8 @@ Only whitelisted players can join. To add a friend, see [administration](../admi
   forward the port), or set `MC_BIND_ADDRESS` to a specific LAN IP.
 - To let friends join from the internet, forward the TCP game port on your router. Keep the whitelist on.
 - RCON (25575) is **never** published. It exists only on the internal Docker network.
+- The SSH administration port (`MCAI_SSH_PORT`, default 2222) listens on 127.0.0.1 unless you allowed your
+  network in the wizard. Don't forward it on your router: use a VPN to administer from outside.
 
 ## Updating
 

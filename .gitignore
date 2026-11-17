@@ -58,3 +58,4 @@ node_modules/
 *.swp
 .DS_Store
 Thumbs.db
+*.egg-info/

@@ -14,3 +14,4 @@ Each significant decision is recorded as `NNNN-title.md`. The template: **Status
 | [0007](0007-clean-room-repository.md) | Clean-room repository, ported code only | Accepted |
 | [0008](0008-gateway-protocol-phase2.md) | Gateway protocol and AI runtime (Phase 2) | Accepted |
 | [0009](0009-ai-builds.md) | AI builds: structured plans, approval, mod-side execution, structure snapshots | Accepted |
+| [0010](0010-management-rbac-ssh.md) | Management over SSH (forced command), roles by UUID/account, hash-chained audit | Accepted |

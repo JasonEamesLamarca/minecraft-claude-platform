@@ -43,11 +43,39 @@ def test_no_docker_socket_mounted(config):
             assert "docker.sock" not in str(v.get("source", "")), name
 
 
-def test_only_game_port_published(config):
+def test_only_game_and_ssh_ports_published(config):
     published = {name: svc.get("ports", []) for name, svc in services(config) if svc.get("ports")}
-    assert list(published) == ["minecraft"]
+    assert sorted(published) == ["minecraft", "ssh-gateway"]
     targets = [int(p["target"]) for p in published["minecraft"]]
     assert targets == [25565], "RCON (25575) or other ports must never be published"
+    ssh = published["ssh-gateway"]
+    assert [int(p["target"]) for p in ssh] == [2222]
+    assert ssh[0]["host_ip"] == "127.0.0.1", "SSH administration must default to this computer only"
+
+
+def test_ssh_gateway_is_locked_down(config):
+    svc = config["services"]["ssh-gateway"]
+    assert {x["source"] for x in svc.get("secrets", [])} == {"management_token"}
+    assert svc.get("read_only") is True
+    assert [v["target"] for v in svc.get("volumes", []) if v.get("type") == "bind"] == ["/data"]
+    sshd = (REPO / "containers/management/sshd_config").read_text()
+    for line in ("PasswordAuthentication no", "KbdInteractiveAuthentication no", "PermitTTY no",
+                 "AllowTcpForwarding no", "AllowStreamLocalForwarding no", "AllowAgentForwarding no",
+                 "X11Forwarding no", "PermitTunnel no", "DisableForwarding yes", "PermitUserEnvironment no",
+                 "ForceCommand /usr/local/bin/mcai-server", "MaxAuthTries 3", "PermitRootLogin no"):
+        assert f"\n{line}\n" in sshd, line
+    assert "Subsystem" not in sshd, "no sftp/scp subsystem"
+
+
+def test_management_token_only_in_gateway_and_ssh_gateway(config):
+    holders = {n for n, svc in services(config) if "management_token" in {x["source"] for x in svc.get("secrets", [])}}
+    assert holders == {"gateway", "ssh-gateway"}
+
+
+def test_gateway_reads_logs_and_backups_read_only(config):
+    gw = config["services"]["gateway"]
+    mounts = {v["target"]: v for v in gw["volumes"]}
+    assert mounts["/mc-logs"].get("read_only") is True and mounts["/backups"].get("read_only") is True
 
 
 def test_internal_network_is_internal(config):

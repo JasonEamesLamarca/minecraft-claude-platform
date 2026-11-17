@@ -61,7 +61,7 @@ jobs:
         run: >
           docker run --rm -v "$PWD:/mnt" -w /mnt
           koalaman/shellcheck:v0.10.0@sha256:2097951f02e735b613f4a34de20c40f937a6c8f18ecb170612c88c34517221fb
-          -S warning scripts/*.sh tests/operational/*.sh
+          -S warning scripts/*.sh tests/operational/*.sh containers/management/mcai-server
 
   unit-tests:
     runs-on: ubuntu-24.04
@@ -99,13 +99,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: build gateway + ai-worker images
+      - name: build gateway, ai-worker and ssh-gateway images
         run: |
           docker build -f containers/gateway/Dockerfile -t mcai-gateway:ci .
           docker build -f containers/claude/Dockerfile -t mcai-ai-worker:ci .
           docker run --rm --entrypoint claude mcai-ai-worker:ci --version
           docker run --rm --entrypoint id mcai-ai-worker:ci -u | grep -qv '^0$'
           docker run --rm --entrypoint id mcai-gateway:ci -u | grep -qv '^0$'
+          docker build -f containers/management/Dockerfile --build-arg PUID=1001 --build-arg PGID=1001 -t mcai-ssh-gateway:ci .
+          docker run --rm --entrypoint id mcai-ssh-gateway:ci -u | grep -qx 1001
+          docker run --rm --entrypoint /usr/sbin/sshd mcai-ssh-gateway:ci -t -f /etc/mcai/sshd_config 2>&1 | grep -q 'no hostkeys' || true
 
   operational:
     # Full first-start / backup / restore / crash-recovery cycle with a real server (~5 min).

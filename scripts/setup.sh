@@ -8,6 +8,7 @@
 # Interactive:      scripts/setup.sh
 # Non-interactive:  scripts/setup.sh --non-interactive --accept-eula --owner Steve [--port 25565]
 #                     [--memory 4G] [--ai-auth none|api-key|subscription] [--start]
+#                     [--ssh-key ~/.ssh/id_ed25519.pub] [--ssh-bind 127.0.0.1|0.0.0.0]
 #                   (with --ai-auth api-key|subscription the credential is read from stdin)
 # Other:            --check   only run prerequisite checks
 #                   --help
@@ -19,7 +20,7 @@ SECRETS="$ROOT/secrets"
 EULA_URL="https://www.minecraft.net/eula"
 
 NONINTERACTIVE=false; ACCEPT_EULA=false; START=false; CHECK_ONLY=false
-OWNER=""; PORT=""; MEMORY=""; AI_AUTH=""
+OWNER=""; PORT=""; MEMORY=""; AI_AUTH=""; SSH_KEY=""; SSH_BIND=""
 
 c_red=$'\e[31m'; c_grn=$'\e[32m'; c_ylw=$'\e[33m'; c_bld=$'\e[1m'; c_off=$'\e[0m'
 [[ -t 1 ]] || { c_red=""; c_grn=""; c_ylw=""; c_bld=""; c_off=""; }
@@ -28,7 +29,7 @@ ok()   { printf '%s✔%s %s\n' "$c_grn" "$c_off" "$*"; }
 warn() { printf '%s!%s %s\n' "$c_ylw" "$c_off" "$*" >&2; }
 die()  { printf '%s✘ %s%s\n' "$c_red" "$*" "$c_off" >&2; exit 1; }
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,6 +39,8 @@ while [[ $# -gt 0 ]]; do
     --port) PORT="${2:?--port needs a value}"; shift ;;
     --memory) MEMORY="${2:?--memory needs a value}"; shift ;;
     --ai-auth) AI_AUTH="${2:?--ai-auth needs a value}"; shift ;;
+    --ssh-key) SSH_KEY="${2:?--ssh-key needs a file}"; shift ;;
+    --ssh-bind) SSH_BIND="${2:?--ssh-bind needs an address}"; shift ;;
     --start) START=true ;;
     --check) CHECK_ONLY=true ;;
     -h|--help) usage; exit 0 ;;
@@ -130,7 +133,7 @@ ok "Owner $OWNER, port $PORT, heap $MEMORY (container limit $(env_get MC_MEM_LIM
 
 # ---------- 5. internal secrets ----------
 info ""; info "${c_bld}Secrets${c_off}"
-for s in rcon_password gateway_mod_token worker_token; do
+for s in rcon_password gateway_mod_token worker_token management_token; do
   if [[ -s "$SECRETS/$s" ]]; then ok "secrets/$s exists (kept)"
   else gen_secret > "$SECRETS/$s"; chmod 600 "$SECRETS/$s"; ok "Generated secrets/$s"; fi
 done
@@ -147,7 +150,9 @@ subscription_notice() {
   warn "/ai requests. Read https://code.claude.com/docs/en/legal-and-compliance - you are responsible for your plan's terms."
 }
 if [[ -z "$AI_AUTH" ]]; then
-  if $NONINTERACTIVE; then AI_AUTH="${current:-none}"
+  if $NONINTERACTIVE; then
+    AI_AUTH="${current:-none}"
+    [[ -s "$CRED" ]] && AI_SKIP_READ=1        # re-run without --ai-auth: keep the stored credential
   else
     info "  1) Anthropic API key (console.anthropic.com) - pay per use; recommended"
     info "  2) Claude subscription token from 'claude setup-token' - see the terms notice"
@@ -162,7 +167,7 @@ case "$AI_AUTH" in
   none) : > "$CRED"; ok "AI authentication skipped (no credential stored)" ;;
   api-key|subscription)
     prefix="sk-ant-api"; [[ "$AI_AUTH" == subscription ]] && { prefix="sk-ant-oat"; subscription_notice; }
-    if [[ -s "$CRED" && "$AI_AUTH" == "$current" ]] && ! $NONINTERACTIVE; then
+    if [[ -z "${AI_SKIP_READ:-}" && -s "$CRED" && "$AI_AUTH" == "$current" ]] && ! $NONINTERACTIVE; then
       [[ "$(ask "A credential is already stored. Replace it? (y/N)" "n")" =~ ^[yY] ]] || { ok "Kept existing credential"; AI_SKIP_READ=1; }
     fi
     if [[ -z "${AI_SKIP_READ:-}" ]]; then
@@ -182,10 +187,41 @@ done
 env_set AI_AUTH_METHOD "$AI_AUTH"
 
 # ---------- 7. SSH administration ----------
-info ""; info "${c_bld}SSH administration${c_off}: not available yet (arrives in Phase 4)."
+info ""; info "${c_bld}SSH administration${c_off} (mcai command line: see docs/administration/README.md)"
+mkdir -p "$ROOT/data/gateway/bootstrap" "$ROOT/data/ssh-gateway"
+if [[ -z "$SSH_BIND" ]]; then
+  cur_bind="$(env_get MCAI_SSH_BIND)"; cur_bind="${cur_bind:-127.0.0.1}"
+  if $NONINTERACTIVE; then SSH_BIND="$cur_bind"
+  else
+    def=n; [[ "$cur_bind" == 0.0.0.0 ]] && def=y
+    if [[ "$(ask "Allow administration from other computers on your network? (y/N)" "$def")" =~ ^[yY] ]]; then
+      SSH_BIND=0.0.0.0; else SSH_BIND=127.0.0.1; fi
+  fi
+fi
+[[ "$SSH_BIND" =~ ^[0-9.]+$|^[0-9a-fA-F:]+$ ]] || die "--ssh-bind must be an IP address such as 127.0.0.1 or 0.0.0.0"
+env_set MCAI_SSH_BIND "$SSH_BIND"
+[[ -n "$(env_get MCAI_SSH_PORT)" ]] || env_set MCAI_SSH_PORT 2222
+if [[ -z "$SSH_KEY" ]] && ! $NONINTERACTIVE; then
+  defkey=""; for k in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_ecdsa.pub" "$HOME/.ssh/id_rsa.pub"; do
+    [[ -f "$k" ]] && { defkey="$k"; break; }; done
+  info "Your SSH public key lets you administer the server with 'mcai' (owner account). Create one with"
+  info "  ssh-keygen -t ed25519   (on the computer you will administer from). Leave empty to skip."
+  SSH_KEY="$(ask "Public key file for the owner account" "$defkey")"
+fi
+if [[ -n "$SSH_KEY" ]]; then
+  SSH_KEY="${SSH_KEY/#\~/$HOME}"
+  [[ -f "$SSH_KEY" && "$SSH_KEY" == *.pub ]] || die "'$SSH_KEY' is not a public key file (*.pub). Never give the private key."
+  keyline="$(head -n 1 "$SSH_KEY")"
+  [[ "$keyline" =~ ^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|ssh-rsa|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com)\ [A-Za-z0-9+/=]+ ]] \
+    || die "$SSH_KEY doesn't look like an OpenSSH public key."
+  printf '%s\n' "$keyline" > "$ROOT/data/gateway/bootstrap/owner.pub"; chmod 600 "$ROOT/data/gateway/bootstrap/owner.pub"
+  ok "Owner SSH key queued: the gateway adds it to the 'owner' account at its next start"
+else
+  ok "No SSH key given (re-run with --ssh-key to add one later)"
+fi
 
 # ---------- 8. server mod + validate ----------
-mkdir -p "$ROOT/data/minecraft" "$ROOT/data/gateway" "$ROOT/backups" "$ROOT/dist/mod"
+mkdir -p "$ROOT/data/minecraft/logs" "$ROOT/data/gateway" "$ROOT/data/ssh-gateway" "$ROOT/backups" "$ROOT/dist/mod"
 if ! compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null; then
   if [[ "${MCAI_SKIP_MOD_BUILD:-}" == 1 ]]; then
     warn "No mod jar in dist/mod and MCAI_SKIP_MOD_BUILD=1: /ai commands will be missing."
@@ -199,7 +235,11 @@ if ! compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null; then
     rm -f "$buildlog"
   fi
 fi
-compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null && ok "Server mod: $(basename "$(ls "$ROOT"/dist/mod/mcai-fabric-*.jar | head -1)")"
+if compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null; then
+  jar="$(ls "$ROOT"/dist/mod/mcai-fabric-*.jar | head -1)"
+  env_set MCAI_MOD_BUILD "$(cksum < "$jar" | cut -d' ' -f1)"    # a new jar recreates the server at `up`
+  ok "Server mod: $(basename "$jar")"
+fi
 (cd "$ROOT" && docker compose config --quiet) || die "docker compose config failed - see the error above."
 ok "compose.yaml validates with your settings"
 if grep -qE '^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)=.+' "$ENV_FILE"; then
@@ -215,6 +255,17 @@ if $START; then
   (cd "$ROOT" && docker compose up -d --build)
   "$ROOT/scripts/wait-healthy.sh" minecraft 900
   ok "Minecraft is up. Connect your Minecraft Java $(env_get MC_VERSION) client to <this-host>:$PORT"
+  if [[ -f "$ROOT/data/gateway/bootstrap/owner.pub" ]]; then        # a new owner key: the gateway imports it at start
+    (cd "$ROOT" && docker compose restart gateway >/dev/null 2>&1) || true
+  fi
+  hostkey="$(cd "$ROOT" && docker compose exec -T ssh-gateway python3 -m mcai.sshgw hostkey 2>/dev/null || true)"
+  if [[ -n "$hostkey" ]]; then
+    host_hint="localhost"; [[ "$SSH_BIND" == 0.0.0.0 ]] && host_hint="<this-host>"
+    info ""; info "${c_bld}Administer from your computer${c_off} (Python 3.9+ and OpenSSH needed there):"
+    info "  management-cli/mcai remote add home $host_hint --port $(env_get MCAI_SSH_PORT) \\"
+    info "      --host-key '$hostkey'"
+    info "  management-cli/mcai status"
+  fi
 else
   info ""; info "Next: ${c_bld}docker compose up -d${c_off}, then ${c_bld}scripts/doctor.sh${c_off}"
 fi

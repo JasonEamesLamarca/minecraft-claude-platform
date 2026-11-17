@@ -1,1 +1,2 @@
 pytest==9.2.0
+textual==8.2.8

@@ -23,8 +23,9 @@ the server.
   involved.
 - **Undo.** Before placing anything, the mod saves the bounding box as a vanilla structure template
   (`world/generated/mcai/structures/undo/<id>.nbt`). `/ai undo` places it back.
-- **Authorization (interim).** Building needs vanilla permission level `AI_BUILD_MIN_OP_LEVEL`, default 4: the
-  console and the owner, the only operator by default. Phase 4 RBAC replaces this.
+- **Authorization.** Since 0.4.0 building needs the `builder` role or higher (ADR-0010), looked up by player UUID.
+  Staff (operator and up) may approve, cancel or undo other players' builds. The interim op-level check
+  (`AI_BUILD_MIN_OP_LEVEL`) is gone.
 
 **Consequences.**
 - Builds are limited to what the schema can express. Fills and setblocks cover structures well. Entities,

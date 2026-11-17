@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
+import re
 import sqlite3
+import time
 import threading
 import uuid
 from pathlib import Path
@@ -39,6 +42,51 @@ CREATE TABLE IF NOT EXISTS requests (
 );
 CREATE INDEX IF NOT EXISTS requests_player ON requests(player_uuid, created_at);
 CREATE INDEX IF NOT EXISTS requests_status ON requests(status);
+CREATE TABLE IF NOT EXISTS players (
+    uuid        TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    role        TEXT NOT NULL DEFAULT 'player',
+    first_seen  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    online      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS players_name ON players(name COLLATE NOCASE);
+CREATE TABLE IF NOT EXISTS sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_uuid TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    joined_at   TEXT NOT NULL,
+    left_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS sessions_player ON sessions(player_uuid, joined_at);
+CREATE TABLE IF NOT EXISTS accounts (
+    name        TEXT PRIMARY KEY,
+    role        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    created_by  TEXT NOT NULL,
+    disabled    INTEGER NOT NULL DEFAULT 0,
+    player_uuid TEXT
+);
+CREATE TABLE IF NOT EXISTS account_keys (
+    fingerprint TEXT PRIMARY KEY,
+    account     TEXT NOT NULL,
+    public_key  TEXT NOT NULL,
+    comment     TEXT NOT NULL DEFAULT '',
+    added_at    TEXT NOT NULL,
+    added_by    TEXT NOT NULL,
+    revoked_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS link_codes (
+    code        TEXT PRIMARY KEY,
+    account     TEXT NOT NULL,
+    expires_at  REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    updated_by  TEXT NOT NULL
+);
 """
 
 
@@ -48,7 +96,8 @@ CREATE INDEX IF NOT EXISTS requests_status ON requests(status);
 ACTIVE = ("queued", "running", "proposed", "approved", "rolling_back")
 MIGRATIONS = [("op_level", "INTEGER NOT NULL DEFAULT 0"), ("plan", "TEXT"), ("summary", "TEXT"),
               ("proposed_at", "TEXT"), ("decided_by", "TEXT"), ("decided_at", "TEXT"), ("built_at", "TEXT"),
-              ("placed", "INTEGER NOT NULL DEFAULT 0")]
+              ("placed", "INTEGER NOT NULL DEFAULT 0"), ("snapshot", "TEXT")]
+AUDIT_FILE_RE = re.compile(r"^audit-(\d{4}-\d{2}-\d{2})(-legacy)?\.jsonl$")
 
 
 def utcnow() -> str:
@@ -62,8 +111,8 @@ def utc_day_start() -> str:
 class Store:
     def __init__(self, data_dir: Path, audit_log_text: bool = False):
         data_dir.mkdir(parents=True, exist_ok=True)
-        (data_dir / "audit").mkdir(exist_ok=True)
-        self.audit_path = data_dir / "audit" / "audit.jsonl"
+        self.audit_dir = data_dir / "audit"
+        self.audit_dir.mkdir(exist_ok=True)
         self.audit_log_text = audit_log_text
         self._lock = threading.Lock()
         self.db = sqlite3.connect(str(data_dir / "gateway.db"), check_same_thread=False, isolation_level=None)
@@ -75,25 +124,129 @@ class Store:
         for col, decl in MIGRATIONS:                       # upgrade databases from older versions in place
             if col not in have:
                 self.db.execute(f"ALTER TABLE requests ADD COLUMN {col} {decl}")
-        for p in (data_dir / "gateway.db", self.audit_path):
-            if p.exists():
-                os.chmod(p, 0o600)
+        if "snapshot" not in have:                         # builds made before snapshot tracking (0.3.x)
+            self.db.execute("UPDATE requests SET snapshot='present' WHERE kind='build' AND status IN "
+                            "('built','interrupted','rolled_back')")
+        os.chmod(data_dir / "gateway.db", 0o600)
+        self._migrate_legacy_audit()
 
-    # ---------- audit ----------
+    # ---------- audit (one JSONL file per UTC day, hash-chained) ----------
+    def audit_files(self) -> list[Path]:
+        return sorted(p for p in self.audit_dir.iterdir() if AUDIT_FILE_RE.match(p.name))
+
+    @property
+    def audit_path(self) -> Path:
+        """Today's audit file."""
+        return self.audit_dir / f"audit-{dt.datetime.now(dt.timezone.utc):%Y-%m-%d}.jsonl"
+
+    def _migrate_legacy_audit(self) -> None:
+        old = self.audit_dir / "audit.jsonl"
+        if not old.exists():
+            return
+        try:
+            first = json.loads(old.open(encoding="utf-8").readline())["ts"][:10]
+        except (ValueError, KeyError, TypeError):
+            first = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+        old.rename(self.audit_dir / f"audit-{first}-legacy.jsonl")
+
+    @staticmethod
+    def _tail_hash(f) -> str | None:
+        """Hash of the last line of an open binary file (None if empty)."""
+        f.seek(0, os.SEEK_END)
+        end = f.tell()
+        if end == 0:
+            return None
+        f.seek(max(0, end - 65536))
+        lines = f.read().rstrip(b"\n").split(b"\n")
+        return hashlib.sha256(lines[-1]).hexdigest()[:32]
+
+    def _last_hash(self) -> str:
+        for p in reversed(self.audit_files()):
+            with open(p, "rb") as f:
+                h = self._tail_hash(f)
+            if h:
+                return h
+        return ""
+
     def audit(self, event: str, **fields) -> None:
-        """Append one audit record. Request text is only stored as length + hash unless AUDIT_LOG_TEXT=true."""
+        """Append one audit record. Request text is only stored as length + hash unless AUDIT_LOG_TEXT=true.
+        Each record carries "prev", a hash of the previous record, so edits or deletions can be detected
+        (`mcai audit verify`). A file lock keeps the chain intact when another process (scripts/set-role.sh)
+        writes too."""
         if "text" in fields and not self.audit_log_text:
             t = fields.pop("text") or ""
             fields["text_len"] = len(t)
             fields["text_sha256"] = hashlib.sha256(t.encode()).hexdigest()[:16]
-        rec = {"ts": utcnow(), "event": event, **fields}
-        line = json.dumps(rec, ensure_ascii=False, sort_keys=True)
         with self._lock:
-            new = not self.audit_path.exists()
-            with open(self.audit_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+            ts = utcnow()
+            path = self.audit_dir / f"audit-{ts[:10]}.jsonl"
+            new = not path.exists()
+            with open(path, "a+b") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    prev = self._tail_hash(f)
+                    if prev is None:                 # first record of the day: chain from the previous file
+                        prev = self._last_hash()
+                    rec = {"ts": ts, "event": event, **fields, "prev": prev}
+                    f.seek(0, os.SEEK_END)
+                    f.write(json.dumps(rec, ensure_ascii=False, sort_keys=True).encode() + b"\n")
+                    f.flush()
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
             if new:
-                os.chmod(self.audit_path, 0o600)
+                os.chmod(path, 0o600)
+
+    def audit_records(self, since: str = "", prefix: str = "", actor: str = "", limit: int = 1000) -> list[dict]:
+        """Newest last. `since` is an ISO timestamp; `prefix` filters event names; `actor` matches any field value."""
+        out: list[dict] = []
+        day = since[:10]
+        for p in reversed(self.audit_files()):
+            m = AUDIT_FILE_RE.match(p.name)
+            chunk = []
+            for raw in p.read_text(encoding="utf-8").splitlines():
+                try:
+                    rec = json.loads(raw)
+                except ValueError:
+                    continue
+                if since and rec.get("ts", "") < since:
+                    continue
+                if prefix and not str(rec.get("event", "")).startswith(prefix):
+                    continue
+                if actor and actor not in {str(v) for v in rec.values()}:
+                    continue
+                chunk.append(rec)
+            out[:0] = chunk
+            if len(out) >= limit or (day and m and m.group(1) < day and not m.group(2)):
+                break
+        return out[-limit:]
+
+    def audit_verify(self) -> tuple[int, str | None]:
+        """(records checked, description of the first break or None). Files deleted by retention are expected."""
+        prev, n = None, 0
+        for p in self.audit_files():
+            for i, raw in enumerate(p.read_bytes().splitlines(), 1):
+                try:
+                    rec = json.loads(raw)
+                except ValueError:
+                    return n, f"{p.name} line {i}: not JSON"
+                if "prev" in rec and prev is not None and rec["prev"] != prev:
+                    return n, f"{p.name} line {i}: chain broken (record changed, inserted or removed before it)"
+                prev = hashlib.sha256(raw).hexdigest()[:32]
+                n += 1
+        return n, None
+
+    def audit_prune(self, keep_days: int) -> list[str]:
+        """Delete daily audit files older than keep_days (0 keeps everything)."""
+        if keep_days <= 0:
+            return []
+        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=keep_days)).strftime("%Y-%m-%d")
+        removed = []
+        for p in self.audit_files():
+            m = AUDIT_FILE_RE.match(p.name)
+            if m and m.group(1) < cutoff:
+                p.unlink()
+                removed.append(p.name)
+        return removed
 
     # ---------- requests ----------
     def create_request(self, player_uuid: str, player_name: str, kind: str, text: str, context: dict,
@@ -191,3 +344,187 @@ class Store:
             self.db.execute("UPDATE requests SET status='interrupted', error=? WHERE status IN ('approved','rolling_back')",
                             (reason,))
             return rows
+
+    def recent_requests(self, n: int = 20, player_uuid: str | None = None, statuses: tuple = ()) -> list[sqlite3.Row]:
+        q, args = "SELECT * FROM requests WHERE 1=1", []
+        if player_uuid:
+            q += " AND player_uuid=?"
+            args.append(player_uuid)
+        if statuses:
+            q += f" AND status IN ({','.join('?' * len(statuses))})"
+            args += list(statuses)
+        with self._lock:
+            return self.db.execute(q + " ORDER BY created_at DESC LIMIT ?", (*args, n)).fetchall()
+
+    def snapshots_to_prune(self, older_than_iso: str) -> list[sqlite3.Row]:
+        """Builds whose undo snapshot still exists and is no longer needed: undone, or older than the undo window."""
+        with self._lock:
+            return self.db.execute(
+                "SELECT id, player_uuid, status FROM requests WHERE snapshot='present' AND status NOT IN "
+                "('approved','rolling_back') AND (status='rolled_back' OR COALESCE(built_at, decided_at, created_at) < ?)",
+                (older_than_iso,)).fetchall()
+
+    def set_snapshot(self, rid: str, state: str) -> None:
+        with self._lock:
+            self.db.execute("UPDATE requests SET snapshot=? WHERE id=?", (state, rid))
+
+    # ---------- players ----------
+    def player(self, uuid_: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.db.execute("SELECT * FROM players WHERE uuid=?", (uuid_,)).fetchone()
+
+    def player_by_name(self, name: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.db.execute("SELECT * FROM players WHERE name=? COLLATE NOCASE ORDER BY last_seen DESC LIMIT 1",
+                                   (name,)).fetchone()
+
+    def players(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.db.execute("SELECT * FROM players ORDER BY online DESC, last_seen DESC").fetchall()
+
+    def owner_player(self) -> sqlite3.Row | None:
+        with self._lock:
+            return self.db.execute("SELECT * FROM players WHERE role='owner' LIMIT 1").fetchone()
+
+    def player_seen(self, uuid_: str, name: str, online: bool | None = None) -> tuple[bool, str]:
+        """Insert or update a player. Returns (is_new, previous name)."""
+        now = utcnow()
+        with self._lock:
+            row = self.db.execute("SELECT name FROM players WHERE uuid=?", (uuid_,)).fetchone()
+            if row is None:
+                self.db.execute("INSERT INTO players(uuid, name, first_seen, last_seen, online) VALUES (?,?,?,?,?)",
+                                (uuid_, name, now, now, int(bool(online))))
+                return True, name
+            sets, args = "name=?, last_seen=?", [name, now]
+            if online is not None:
+                sets += ", online=?"
+                args.append(int(online))
+            self.db.execute(f"UPDATE players SET {sets} WHERE uuid=?", (*args, uuid_))
+            return False, row["name"]
+
+    def set_player_role(self, uuid_: str, role: str) -> None:
+        with self._lock:
+            self.db.execute("UPDATE players SET role=? WHERE uuid=?", (role, uuid_))
+
+    def session_open(self, uuid_: str, name: str) -> None:
+        with self._lock:
+            self.db.execute("UPDATE sessions SET left_at=? WHERE player_uuid=? AND left_at IS NULL", (utcnow(), uuid_))
+            self.db.execute("INSERT INTO sessions(player_uuid, name, joined_at) VALUES (?,?,?)", (uuid_, name, utcnow()))
+
+    def session_close(self, uuid_: str) -> bool:
+        with self._lock:
+            cur = self.db.execute("UPDATE sessions SET left_at=? WHERE player_uuid=? AND left_at IS NULL",
+                                  (utcnow(), uuid_))
+            self.db.execute("UPDATE players SET online=0 WHERE uuid=?", (uuid_,))
+            return cur.rowcount > 0
+
+    def online_uuids(self) -> set[str]:
+        with self._lock:
+            return {r[0] for r in self.db.execute("SELECT uuid FROM players WHERE online=1")}
+
+    def sessions(self, uuid_: str | None = None, n: int = 50) -> list[sqlite3.Row]:
+        q, args = "SELECT * FROM sessions", []
+        if uuid_:
+            q += " WHERE player_uuid=?"
+            args.append(uuid_)
+        with self._lock:
+            return self.db.execute(q + " ORDER BY joined_at DESC LIMIT ?", (*args, n)).fetchall()
+
+    # ---------- management accounts ----------
+    def account(self, name: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self.db.execute("SELECT * FROM accounts WHERE name=?", (name,)).fetchone()
+
+    def accounts(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.db.execute(
+                "SELECT a.*, (SELECT COUNT(*) FROM account_keys k WHERE k.account=a.name AND k.revoked_at IS NULL)"
+                " AS keys FROM accounts a ORDER BY name").fetchall()
+
+    def create_account(self, name: str, role: str, by: str) -> bool:
+        with self._lock:
+            try:
+                self.db.execute("INSERT INTO accounts(name, role, created_at, created_by) VALUES (?,?,?,?)",
+                                (name, role, utcnow(), by))
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+    def update_account(self, name: str, **fields) -> None:
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self._lock:
+            self.db.execute(f"UPDATE accounts SET {cols} WHERE name=?", (*fields.values(), name))
+
+    def add_key(self, account: str, fingerprint: str, public_key: str, comment: str, by: str) -> bool:
+        with self._lock:
+            row = self.db.execute("SELECT revoked_at FROM account_keys WHERE fingerprint=?", (fingerprint,)).fetchone()
+            if row is not None:
+                return False             # a key is never reused, even after revocation
+            self.db.execute("INSERT INTO account_keys(fingerprint, account, public_key, comment, added_at, added_by)"
+                            " VALUES (?,?,?,?,?,?)", (fingerprint, account, public_key, comment, utcnow(), by))
+            return True
+
+    def revoke_key(self, fingerprint: str) -> sqlite3.Row | None:
+        with self._lock:
+            row = self.db.execute("SELECT * FROM account_keys WHERE fingerprint=? AND revoked_at IS NULL",
+                                  (fingerprint,)).fetchone()
+            if row:
+                self.db.execute("UPDATE account_keys SET revoked_at=? WHERE fingerprint=?", (utcnow(), fingerprint))
+            return row
+
+    def revoke_all_keys(self, account: str) -> int:
+        with self._lock:
+            return self.db.execute("UPDATE account_keys SET revoked_at=? WHERE account=? AND revoked_at IS NULL",
+                                   (utcnow(), account)).rowcount
+
+    def keys(self, account: str | None = None, active_only: bool = True) -> list[sqlite3.Row]:
+        q, args = "SELECT * FROM account_keys WHERE 1=1", []
+        if account:
+            q += " AND account=?"
+            args.append(account)
+        if active_only:
+            q += " AND revoked_at IS NULL"
+        with self._lock:
+            return self.db.execute(q + " ORDER BY added_at", args).fetchall()
+
+    def key_owner(self, fingerprint: str) -> sqlite3.Row | None:
+        """The enabled account an active key belongs to, or None."""
+        with self._lock:
+            return self.db.execute(
+                "SELECT a.* FROM account_keys k JOIN accounts a ON a.name=k.account WHERE k.fingerprint=?"
+                " AND k.revoked_at IS NULL AND a.disabled=0", (fingerprint,)).fetchone()
+
+    def active_keys(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self.db.execute(
+                "SELECT k.fingerprint, k.public_key, k.account FROM account_keys k JOIN accounts a ON a.name=k.account"
+                " WHERE k.revoked_at IS NULL AND a.disabled=0 ORDER BY k.added_at").fetchall()
+
+    def new_link_code(self, account: str, ttl_s: int = 600) -> str:
+        code = uuid.uuid4().hex[:8]
+        with self._lock:
+            self.db.execute("DELETE FROM link_codes WHERE account=? OR expires_at < ?", (account, time.time()))
+            self.db.execute("INSERT INTO link_codes(code, account, expires_at) VALUES (?,?,?)",
+                            (code, account, time.time() + ttl_s))
+        return code
+
+    def use_link_code(self, code: str) -> str | None:
+        with self._lock:
+            row = self.db.execute("SELECT account, expires_at FROM link_codes WHERE code=?", (code,)).fetchone()
+            self.db.execute("DELETE FROM link_codes WHERE code=?", (code,))
+            return row["account"] if row and row["expires_at"] >= time.time() else None
+
+    # ---------- runtime settings (changed through the management API) ----------
+    def setting(self, key: str) -> str | None:
+        with self._lock:
+            row = self.db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            return row[0] if row else None
+
+    def set_setting(self, key: str, value: str | None, by: str) -> None:
+        with self._lock:
+            if value is None:
+                self.db.execute("DELETE FROM settings WHERE key=?", (key,))
+            else:
+                self.db.execute("INSERT INTO settings(key, value, updated_at, updated_by) VALUES (?,?,?,?) "
+                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at,"
+                                " updated_by=excluded.updated_by", (key, value, utcnow(), by))

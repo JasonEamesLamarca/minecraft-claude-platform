@@ -1,19 +1,28 @@
 """Integration gateway: the only component that talks to both the Minecraft mod and the AI worker.
 
 Mod API (Bearer gateway_mod_token):
-  POST /v1/mod/requests            {player_uuid, player_name, op_level, kind:"ask"|"build", text, context}
-  POST /v1/mod/approve             {player_uuid, op_level, request_id?}     build a proposed plan
-  POST /v1/mod/cancel              {player_uuid, op_level, request_id?}     drop a queued/proposed request
-  POST /v1/mod/undo                {player_uuid, op_level, request_id?}     restore the snapshot of a build
-  POST /v1/mod/builds/<id>/report  {status: invalid|built|failed|rolled_back|rollback_failed, placed, error}
-  GET  /v1/mod/events?wait=25      long-poll: messages, previews, execute/rollback orders for the mod
+  POST /v1/mod/requests            {player_uuid, player_name, kind:"ask"|"build", text, context}
+  POST /v1/mod/approve             {player_uuid, player_name, request_id?}  build a proposed plan
+  POST /v1/mod/cancel              {player_uuid, player_name, request_id?}  drop a queued/proposed request
+  POST /v1/mod/undo                {player_uuid, player_name, request_id?}  restore the snapshot of a build
+  POST /v1/mod/link                {player_uuid, player_name, code}         link a management account
+  POST /v1/mod/players             {event: join|leave, player_uuid, player_name}
+  POST /v1/mod/heartbeat           {players: [{uuid, name}], mspt, heap_used_mb, heap_max_mb, uptime_s, version}
+  POST /v1/mod/builds/<id>/report  {status: invalid|built|failed|rolled_back|rollback_failed|pruned, placed, error}
+  GET  /v1/mod/events?wait=25      long-poll: messages, previews, execute/rollback/prune orders for the mod
   GET  /v1/mod/status?player_uuid=...
   GET  /v1/mod/history?player_uuid=...
 Worker API (Bearer worker_token):
   GET  /v1/worker/jobs?wait=25     long-poll: next job
   POST /v1/worker/jobs/<id>/result {ok, text, plan?, error, error_code, cost_usd, input_tokens, output_tokens, provider}
+Management API (Bearer management_token, used only by the SSH gateway container; see management.py):
+  POST /v1/mgmt/run                {key, source_ip, session, argv}         one management command
+  GET  /v1/mgmt/authorized-keys                                            active SSH keys
+  POST /v1/mgmt/ssh-event          {result, user, fingerprint, source_ip}  sshd authentication results
+  POST /v1/mgmt/session            {event: start|end, key, source_ip, session, duration_s}
 Health: GET /healthz (no auth, no data)
 
+Roles (rbac.py) are looked up by player UUID or account; the mod's own claims are never trusted.
 Each token only opens its own API. The gateway re-validates every plan (it never trusts the worker) and only
 orders a build after an authorized approval. The mod places blocks itself through the game's API: no commands.
 """
@@ -33,9 +42,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
+from . import management
 from .config import GatewaySettings, setup_logging
 from .plan import Limits, PlanError, validate
 from .ratelimit import RateLimiter
+from .rbac import Actor
 from .sanitize import clean_name, clean_player_text, clean_reply
 from .store import Store, utcnow
 
@@ -47,7 +58,8 @@ RID_RE = re.compile(r"^[0-9a-f]{6,12}$")
 CONSOLE_UUID = "00000000-0000-0000-0000-000000000000"
 CONTEXT_KEYS = {"dimension": str, "x": int, "y": int, "z": int, "yaw": int, "game_mode": str}
 GENERIC_FAILURE = "Sorry, the AI could not answer that right now."
-REPORT_STATUSES = {"invalid", "built", "failed", "rolled_back", "rollback_failed"}
+REPORT_STATUSES = {"invalid", "built", "failed", "rolled_back", "rollback_failed", "pruned"}
+CONSOLE = Actor("console", CONSOLE_UUID, "Server", "owner")   # the console already has full host access
 
 
 class Rejected(Exception):
@@ -88,7 +100,16 @@ class Gateway:
         self.executing: dict[str, float] = {}          # builds/rollbacks ordered from the mod -> deadline
         self.events: deque[dict] = deque(maxlen=1000)  # consumed by the mod
         self.last_worker_seen = 0.0
+        self.heartbeat: dict = {}                      # latest server stats from the mod
+        self.heartbeat_at = 0.0
+        self.pruning: dict[str, float] = {}            # snapshot prune orders -> re-send after (monotonic)
+        self.next_retention = 0.0
+        self.rcon = None
+        if settings.rcon_password:
+            from .rcon import Rcon
+            self.rcon = Rcon(settings.rcon_host, settings.rcon_port, settings.rcon_password)
         self._stop = threading.Event()
+        self.import_bootstrap_keys()
         for row in store.fail_unfinished("gateway restarted"):
             store.audit("request.interrupted", request_id=row["id"], player_uuid=row["player_uuid"],
                         previous_status=row["status"], reason="gateway restarted")
@@ -112,17 +133,65 @@ class Gateway:
             log.error("protected-areas.json is invalid: refusing all builds until it is fixed")
             return [("invalid protected-areas.json", "*", (-30_000_000, -64, -30_000_000), (30_000_000, 319, 30_000_000))]
 
-    def authorize(self, player_uuid: str, kind: str, op_level: int) -> bool:
-        """Phase 3 policy (RBAC replaces it in Phase 4): everyone may ask; building needs the vanilla
-        permission level AI_BUILD_MIN_OP_LEVEL (default 4: the owner, the only operator by default)."""
-        if kind == "ask":
-            return True
-        return kind == "build" and op_level >= self.s.build_min_op_level
+    # ---------- identity ----------
+    def identify(self, player_uuid: str, name: str) -> Actor:
+        """The player's role from the players table (UUID is authoritative; names only label)."""
+        if player_uuid == CONSOLE_UUID:
+            return CONSOLE
+        row = self.store.player(player_uuid)
+        if row is None or (name and row["name"] != name):
+            self.store.player_seen(player_uuid, name or (row["name"] if row else "?"))
+            self._bootstrap_owner(player_uuid, name)
+            row = self.store.player(player_uuid)
+        return Actor("player", player_uuid, row["name"], row["role"])
 
-    @staticmethod
-    def _op_level(body: dict) -> int:
-        v = body.get("op_level", 0)
-        return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 4 else 0
+    def _bootstrap_owner(self, player_uuid: str, name: str) -> None:
+        """MC_OWNER becomes the owner at its first appearance, then the UUID is what counts. Only in online mode,
+        where Mojang authenticates names; otherwise make the owner from the host (docs/administration)."""
+        if not (self.s.owner_name and name and name.lower() == self.s.owner_name.lower()):
+            return
+        if not self.s.online_mode:
+            log.warning("MC_ONLINE_MODE is false: not trusting the name %s for the owner role", name)
+            return
+        if self.store.owner_player() is None:
+            self.store.set_player_role(player_uuid, "owner")
+            self.store.audit("role.bootstrap", player_uuid=player_uuid, player_name=name, role="owner",
+                             reason="MC_OWNER first seen")
+
+    def mod_actor(self, body: dict) -> Actor:
+        raw = body.get("player_name")
+        return self.identify(self._player(body), clean_name(raw) if isinstance(raw, str) and raw.strip() else "")
+
+    def ai_enabled(self) -> bool:
+        return self.store.setting("ai.enabled") != "false"
+
+    def daily_budget(self) -> float:
+        v = self.store.setting("ai.daily_budget_usd")
+        try:
+            return float(v) if v is not None else self.s.daily_budget_usd
+        except ValueError:
+            return self.s.daily_budget_usd
+
+    def import_bootstrap_keys(self) -> None:
+        """<data>/bootstrap/owner.pub (written by setup.sh on the host) adds an SSH key to the 'owner' account.
+        Whoever can write the gateway's data directory already controls the host, so this grants nothing new;
+        it is also how a lost owner key is replaced."""
+        from .sshkeys import KeyError_, parse_public_key
+        path = Path(self.s.data_dir) / "bootstrap" / "owner.pub"
+        if not path.exists():
+            return
+        try:
+            key = parse_public_key(path.read_text())
+        except KeyError_ as e:
+            log.error("bootstrap/owner.pub ignored: %s", e)
+            return
+        if self.store.account("owner") is None:
+            self.store.create_account("owner", "owner", "host")
+            self.store.audit("account.created", account="owner", role="owner", by="host:bootstrap")
+        self.store.update_account("owner", role="owner", disabled=0)
+        if self.store.add_key("owner", key.fingerprint, key.line, key.comment, "host:bootstrap"):
+            self.store.audit("account.key_added", account="owner", fingerprint=key.fingerprint, by="host:bootstrap")
+        path.rename(path.with_name(f"owner.pub.imported-{int(time.time())}"))
 
     @staticmethod
     def _player(body: dict) -> str:
@@ -138,7 +207,7 @@ class Gateway:
         kind = body.get("kind")
         if kind not in KINDS:
             raise Rejected(400, "Unknown request type.", "bad_kind")
-        op_level = self._op_level(body)
+        actor = self.mod_actor(body)
         try:
             text = clean_player_text(body.get("text", ""), self.s.max_prompt_chars)
         except ValueError as e:
@@ -149,12 +218,15 @@ class Gateway:
             self.store.audit("request.rejected", player_uuid=player_uuid, player_name=name, kind=kind, reason=code)
             raise Rejected(status, msg, code)
 
-        if not self.authorize(player_uuid, kind, op_level):
-            reject(403, "You are not allowed to do that." if kind != "build"
-                   else "Building with the AI needs a higher permission level on this server.", "forbidden")
+        if not actor.can("ai." + kind):
+            reject(403, "You are not allowed to use the AI." if kind != "build"
+                   else "Building with the AI needs the builder role. Ask the server owner.", "forbidden")
+        if not self.ai_enabled():
+            reject(503, "The AI is switched off on this server right now.", "disabled")
         if kind == "build" and not all(k in context for k in ("x", "y", "z", "dimension")):
             reject(400, "Building needs your position: use /ai build in game.", "no_position")
-        if self.s.daily_budget_usd <= 0 or self.store.spend_today() >= self.s.daily_budget_usd:
+        budget = self.daily_budget()
+        if budget <= 0 or self.store.spend_today() >= budget:
             reject(429, "The AI has reached today's budget. Try again tomorrow.", "budget_exhausted")
         with self.cond:   # checks + enqueue under one lock, so two quick requests can't both pass
             if len(self.store.pending_for(player_uuid)) >= self.s.max_pending_per_player:
@@ -164,87 +236,91 @@ class Gateway:
                 reject(429, f"Too many requests. Try again in {int(wait_s) + 1} s.", "rate_limited")
             if len(self.jobs) >= self.s.max_queue:
                 reject(503, "The AI is busy. Try again in a minute.", "queue_full")
-            rid = self.store.create_request(player_uuid, name, kind, text, context, op_level)
+            rid = self.store.create_request(player_uuid, name, kind, text, context)
             self.jobs.append(rid)
             self.cond.notify_all()
         self.store.audit("request.accepted", request_id=rid, player_uuid=player_uuid, player_name=name, kind=kind,
-                         op_level=op_level, text=text)
+                         role=actor.role, text=text)
         msg = "Thinking..." if kind == "ask" else f"Designing your build (request {rid})... this can take a minute."
         return {"accepted": True, "request_id": rid, "message": msg}
 
-    def _find(self, body: dict, statuses: tuple, kind: str | None = "build"):
-        """The request named in body (any owner), or the player's latest one in one of `statuses`."""
-        player_uuid = self._player(body)
-        rid = body.get("request_id")
+    def _find(self, actor: Actor, rid, statuses: tuple, kind: str | None = "build"):
+        """The request named by id (any owner), or the actor's latest one in one of `statuses`."""
         if rid:
             if not isinstance(rid, str) or not RID_RE.match(rid.lower()):
                 raise Rejected(400, "Invalid request id.", "bad_id")
             row = self.store.get(rid.lower())
             if row is None:
                 raise Rejected(404, f"No request {rid}.", "unknown")
-        else:
-            row = self.store.latest(player_uuid, statuses, kind)
-            if row is None:
-                raise Rejected(404, "You have no request that can be used with this command.", "none")
-        return player_uuid, row
+            return row
+        row = self.store.latest(actor.id, statuses, kind) if actor.kind != "account" else None
+        if row is None:
+            raise Rejected(404, "You have no request that can be used with this command." if actor.kind != "account"
+                           else "Give the request id.", "none")
+        return row
 
-    def _may_decide(self, player_uuid: str, op_level: int, row) -> bool:
-        """The requester (still allowed to build) or an operator of the highest level."""
-        if op_level >= 4:
+    @staticmethod
+    def _may_decide(actor: Actor, row, own_permission: str = "ai.build") -> bool:
+        """Staff may decide on anyone's request; others only on their own, while they still hold the right."""
+        if actor.can("ai.decide_any"):
             return True
-        return row["player_uuid"] == player_uuid and self.authorize(player_uuid, "build", op_level)
+        return actor.kind == "player" and row["player_uuid"] == actor.id and actor.can(own_permission)
 
-    def approve(self, body: dict) -> dict:
-        player_uuid, row = self._find(body, ("proposed",))
-        op_level = self._op_level(body)
+    def approve(self, actor: Actor, rid=None) -> dict:
+        row = self._find(actor, rid, ("proposed",))
         rid = row["id"]
         if row["kind"] != "build" or row["status"] != "proposed":
             raise Rejected(409, f"Request {rid} is {row['status']}, not waiting for approval.", "bad_state")
-        if not self._may_decide(player_uuid, op_level, row):
-            self.store.audit("build.approve_denied", request_id=rid, player_uuid=player_uuid)
+        if not self._may_decide(actor, row):
+            self.store.audit("build.approve_denied", request_id=rid, actor=actor.label, role=actor.role)
             raise Rejected(403, "You can't approve this build.", "forbidden")
         if _age_s(row["proposed_at"]) > self.s.approve_ttl_s:
             self.store.transition(rid, ("proposed",), "expired")
             raise Rejected(410, f"Proposal {rid} has expired. Ask again with /ai build.", "expired")
-        if not self.store.transition(rid, ("proposed",), "approved", decided_by=player_uuid, decided_at=utcnow()):
+        if not self.store.transition(rid, ("proposed",), "approved", decided_by=actor.label, decided_at=utcnow(),
+                                     snapshot="present"):
             raise Rejected(409, f"Request {rid} was already decided.", "bad_state")
         plan = json.loads(row["plan"])
         summary = json.loads(row["summary"])
-        self.store.audit("build.approved", request_id=rid, player_uuid=row["player_uuid"], approved_by=player_uuid,
-                         block_count=summary["block_count"], bbox_from=summary["from"], bbox_to=summary["to"],
-                         dimension=plan["dimension"])
+        self.store.audit("build.approved", request_id=rid, player_uuid=row["player_uuid"], approved_by=actor.label,
+                         role=actor.role, block_count=summary["block_count"], bbox_from=summary["from"],
+                         bbox_to=summary["to"], dimension=plan["dimension"])
         with self.cond:
             self.executing[rid] = self.clock() + self.s.exec_timeout_s
             self.events.append({"id": uuid.uuid4().hex[:8], "type": "execute", "request_id": rid,
                                 "player_uuid": row["player_uuid"], "plan": plan, "summary": summary})
             self.cond.notify_all()
+        if actor.kind == "account" or row["player_uuid"] != actor.id:
+            self.notify(row["player_uuid"], f"Your build {rid} was approved by {actor.name}.", "info", rid)
         return {"ok": True, "message": f"Approved. Building {summary['title']} ({summary['block_count']} blocks)..."}
 
-    def cancel(self, body: dict) -> dict:
-        player_uuid, row = self._find(body, ("queued", "running", "proposed"), kind=None)
+    def cancel(self, actor: Actor, rid=None) -> dict:
+        row = self._find(actor, rid, ("queued", "running", "proposed"), kind=None)
         rid = row["id"]
-        if not (row["player_uuid"] == player_uuid or self._op_level(body) >= 4):
+        if not self._may_decide(actor, row, own_permission="ai.ask"):
             raise Rejected(403, "You can't cancel someone else's request.", "forbidden")
         if not self.store.transition(rid, ("queued", "running", "proposed"), "cancelled",
-                                     decided_by=player_uuid, decided_at=utcnow()):
+                                     decided_by=actor.label, decided_at=utcnow()):
             raise Rejected(409, f"Request {rid} is {row['status']} and can't be cancelled.", "bad_state")
         with self.cond:
             if rid in self.jobs:
                 self.jobs.remove(rid)
-        self.store.audit("request.cancelled", request_id=rid, player_uuid=row["player_uuid"], cancelled_by=player_uuid)
+        self.store.audit("request.cancelled", request_id=rid, player_uuid=row["player_uuid"], cancelled_by=actor.label)
         return {"ok": True, "message": f"Cancelled request {rid}."}
 
-    def undo(self, body: dict) -> dict:
-        player_uuid, row = self._find(body, ("built", "interrupted"))
+    def undo(self, actor: Actor, rid=None) -> dict:
+        row = self._find(actor, rid, ("built", "interrupted"))
         rid = row["id"]
         if row["kind"] != "build" or row["status"] not in ("built", "interrupted"):
             raise Rejected(409, f"Request {rid} is {row['status']}; only finished builds can be undone.", "bad_state")
-        if not self._may_decide(player_uuid, self._op_level(body), row):
+        if not self._may_decide(actor, row):
             raise Rejected(403, "You can't undo this build.", "forbidden")
-        if not self.store.transition(rid, ("built", "interrupted"), "rolling_back", decided_by=player_uuid,
+        if row["snapshot"] == "pruned":
+            raise Rejected(410, f"Build {rid} is older than the undo window ({self.s.undo_keep_days} days).", "expired")
+        if not self.store.transition(rid, ("built", "interrupted"), "rolling_back", decided_by=actor.label,
                                      decided_at=utcnow()):
             raise Rejected(409, f"Request {rid} changed state, try again.", "bad_state")
-        self.store.audit("build.undo_requested", request_id=rid, player_uuid=row["player_uuid"], by=player_uuid)
+        self.store.audit("build.undo_requested", request_id=rid, player_uuid=row["player_uuid"], by=actor.label)
         plan = json.loads(row["plan"])
         with self.cond:
             self.executing[rid] = self.clock() + self.s.exec_timeout_s
@@ -254,6 +330,64 @@ class Gateway:
             self.cond.notify_all()
         return {"ok": True, "message": f"Restoring the area of build {rid}..."}
 
+    # ---------- mod side: players, link, heartbeat ----------
+    def player_event(self, body: dict) -> dict:
+        player_uuid = self._player(body)
+        if player_uuid == CONSOLE_UUID:
+            raise Rejected(400, "Invalid player.", "bad_player")
+        name = clean_name(body.get("player_name", ""))
+        event = body.get("event")
+        if event == "join":
+            is_new, old_name = self.store.player_seen(player_uuid, name, online=True)
+            self._bootstrap_owner(player_uuid, name)
+            self.store.session_open(player_uuid, name)
+            extra = {"first_join": True} if is_new else ({"previous_name": old_name} if old_name != name else {})
+            self.store.audit("player.join", player_uuid=player_uuid, player_name=name, **extra)
+        elif event == "leave":
+            if self.store.session_close(player_uuid):
+                self.store.audit("player.leave", player_uuid=player_uuid, player_name=name)
+        else:
+            raise Rejected(400, "bad event", "bad_event")
+        return {"ok": True}
+
+    def heartbeat_in(self, body: dict) -> dict:
+        players = body.get("players") if isinstance(body.get("players"), list) else []
+        online = {}
+        for p in players[:500]:
+            if isinstance(p, dict) and UUID_RE.match(str(p.get("uuid", "")).lower()):
+                online[str(p["uuid"]).lower()] = clean_name(p.get("name", ""))
+        for gone in self.store.online_uuids() - set(online):        # missed leave events (gateway restarts)
+            if self.store.session_close(gone):
+                self.store.audit("player.leave", player_uuid=gone, reason="not online at heartbeat")
+        known = self.store.online_uuids()
+        for u, n in online.items():
+            if u not in known:
+                self.player_event({"event": "join", "player_uuid": u, "player_name": n})
+        stats = {}
+        for k in ("mspt", "heap_used_mb", "heap_max_mb", "uptime_s"):
+            v = body.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < 1e9:
+                stats[k] = round(float(v), 2)
+        stats["version"] = clean_name(str(body.get("version", "")))[:20]
+        stats["players"] = sorted(online.values())
+        with self.cond:
+            self.heartbeat, self.heartbeat_at = stats, self.clock()
+        return {"ok": True}
+
+    def link(self, body: dict) -> dict:
+        actor = self.mod_actor(body)
+        code = str(body.get("code", "")).strip().lower()
+        if actor.kind != "player":
+            raise Rejected(400, "Only players can link an account.", "bad_player")
+        account = self.store.use_link_code(code) if re.fullmatch(r"[0-9a-f]{8}", code) else None
+        if account is None:
+            self.store.audit("account.link_failed", player_uuid=actor.id)
+            raise Rejected(404, "That code is unknown or expired. Run 'mcai account link' again.", "bad_code")
+        self.store.update_account(account, player_uuid=actor.id)
+        self.store.audit("account.linked", account=account, player_uuid=actor.id, player_name=actor.name)
+        return {"ok": True, "message": f"Linked to management account '{account}'. This doesn't change your "
+                                      "in-game rights."}
+
     def report(self, rid: str, body: dict) -> dict:
         """Outcome of a preview check, a build or a rollback, reported by the mod."""
         row = self.store.get(rid)
@@ -262,6 +396,12 @@ class Gateway:
         status = body.get("status")
         if status not in REPORT_STATUSES:
             raise Rejected(400, "bad status", "bad_status")
+        if status == "pruned":
+            with self.cond:
+                self.pruning.pop(rid, None)
+            self.store.set_snapshot(rid, "pruned")
+            self.store.audit("build.snapshot_pruned", request_id=rid)
+            return {"recorded": True}
         placed = body.get("placed") if isinstance(body.get("placed"), int) else 0
         error = str(body.get("error", ""))[:300] or None
         owner = row["player_uuid"]
@@ -313,13 +453,19 @@ class Gateway:
     def status(self, player_uuid: str) -> dict:
         pending = self.store.pending_for(player_uuid) if UUID_RE.match(player_uuid or "") else []
         spent = self.store.spend_today()
-        worker_ok = self.clock() - self.last_worker_seen < 90
+        worker_ok = self.worker_online()
         parts = [("Active: " + ", ".join(f"{r['id']} {r['kind']} {r['status']}" for r in pending)) if pending
                  else "No requests in progress",
-                 f"AI budget today: ${spent:.2f} of ${self.s.daily_budget_usd:.2f}",
-                 "AI worker: online" if worker_ok else "AI worker: offline"]
+                 f"AI budget today: ${spent:.2f} of ${self.daily_budget():.2f}",
+                 ("AI worker: online" if worker_ok else "AI worker: offline") + ("" if self.ai_enabled() else " (AI off)")]
         return {"message": " | ".join(parts), "pending": [dict(r) for r in pending], "spent_today_usd": round(spent, 4),
-                "budget_usd": self.s.daily_budget_usd, "worker_online": worker_ok}
+                "budget_usd": self.daily_budget(), "worker_online": worker_ok}
+
+    def worker_online(self) -> bool:
+        return self.last_worker_seen > 0 and self.clock() - self.last_worker_seen < 90
+
+    def mod_online(self) -> bool:
+        return self.heartbeat_at > 0 and self.clock() - self.heartbeat_at < 90
 
     def history(self, player_uuid: str) -> dict:
         rows = self.store.history(player_uuid, 5) if UUID_RE.match(player_uuid or "") else []
@@ -444,7 +590,27 @@ class Gateway:
             if _age_s(row["proposed_at"]) > self.s.approve_ttl_s and self.store.transition(row["id"], ("proposed",), "expired"):
                 self.store.audit("build.expired", request_id=row["id"], player_uuid=row["player_uuid"])
                 self.notify(row["player_uuid"], f"Proposal {row['id']} expired without approval.", "info", row["id"])
+        self.prune_snapshots()
+        if now >= self.next_retention:
+            self.next_retention = now + 3600
+            for name in self.store.audit_prune(self.s.audit_retention_days):
+                log.info("audit retention: removed %s", name)
 
+    def prune_snapshots(self) -> None:
+        """Ask the mod to delete undo snapshots of undone builds and of builds older than the undo window."""
+        keep = self.s.undo_keep_days
+        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=keep)).isoformat().replace("+00:00", "Z") \
+            if keep > 0 else "0000"
+        rows = self.store.snapshots_to_prune(cutoff)
+        now = self.clock()
+        ids = [r["id"] for r in rows if self.pruning.get(r["id"], 0) <= now][:50]
+        if not ids:
+            return
+        with self.cond:
+            for rid in ids:
+                self.pruning[rid] = now + 600
+            self.events.append({"id": uuid.uuid4().hex[:8], "type": "prune", "request_ids": ids})
+            self.cond.notify_all()
     def stop(self) -> None:
         self._stop.set()
         with self.cond:
@@ -469,9 +635,10 @@ def make_handler(gw: Gateway):
             self.wfile.write(data)
 
         def _auth(self, which: str) -> bool:
-            expected = gw.s.mod_token if which == "mod" else gw.s.worker_token
+            expected = {"mod": gw.s.mod_token, "worker": gw.s.worker_token, "mgmt": gw.s.management_token}[which]
             got = self.headers.get("Authorization", "")
-            if not got.startswith("Bearer ") or not hmac.compare_digest(got[7:].encode(), expected.encode()):
+            if (not expected or not got.startswith("Bearer ")
+                    or not hmac.compare_digest(got[7:].encode(), expected.encode())):
                 gw.store.audit("auth.failed", api=which, source=self.client_address[0], path=urlparse(self.path).path)
                 self._send(401, {"message": "unauthorized"})
                 return False
@@ -482,7 +649,7 @@ def make_handler(gw: Gateway):
                 n = int(self.headers.get("Content-Length", "0"))
             except ValueError:
                 n = -1
-            limit = MAX_BODY * 64 if self.path.startswith("/v1/worker/") else MAX_BODY   # plans can be large
+            limit = MAX_BODY * 64 if self.path.startswith(("/v1/worker/", "/v1/mod/heartbeat")) else MAX_BODY
             if n < 0 or n > limit:
                 self._send(413, {"message": "request too large"})
                 return None
@@ -512,7 +679,8 @@ def make_handler(gw: Gateway):
             routes = {"/v1/mod/events": ("mod", lambda: {"events": gw.take_events(self._wait(q))}),
                       "/v1/mod/status": ("mod", lambda: gw.status(player)),
                       "/v1/mod/history": ("mod", lambda: gw.history(player)),
-                      "/v1/worker/jobs": ("worker", lambda: {"job": gw.next_job(self._wait(q))})}
+                      "/v1/worker/jobs": ("worker", lambda: {"job": gw.next_job(self._wait(q))}),
+                      "/v1/mgmt/authorized-keys": ("mgmt", lambda: {"keys": management.authorized_keys(gw)})}
             if u.path in routes:
                 api, fn = routes[u.path]
                 if self._auth(api):
@@ -522,12 +690,23 @@ def make_handler(gw: Gateway):
 
         def do_POST(self):
             u = urlparse(self.path)
-            mod_routes = {"/v1/mod/requests": gw.submit, "/v1/mod/approve": gw.approve,
-                          "/v1/mod/cancel": gw.cancel, "/v1/mod/undo": gw.undo}
+            routes = {
+                "/v1/mod/requests": ("mod", gw.submit),
+                "/v1/mod/approve": ("mod", lambda b: gw.approve(gw.mod_actor(b), b.get("request_id"))),
+                "/v1/mod/cancel": ("mod", lambda b: gw.cancel(gw.mod_actor(b), b.get("request_id"))),
+                "/v1/mod/undo": ("mod", lambda b: gw.undo(gw.mod_actor(b), b.get("request_id"))),
+                "/v1/mod/link": ("mod", gw.link),
+                "/v1/mod/players": ("mod", gw.player_event),
+                "/v1/mod/heartbeat": ("mod", gw.heartbeat_in),
+                "/v1/mgmt/run": ("mgmt", lambda b: management.run(gw, b)),
+                "/v1/mgmt/ssh-event": ("mgmt", lambda b: management.ssh_event(gw, b)),
+                "/v1/mgmt/session": ("mgmt", lambda b: management.session_event(gw, b)),
+            }
             try:
-                if u.path in mod_routes:
-                    if self._auth("mod") and (body := self._body()) is not None:
-                        self._send(200, mod_routes[u.path](body))
+                if u.path in routes:
+                    api, fn = routes[u.path]
+                    if self._auth(api) and (body := self._body()) is not None:
+                        self._send(200, fn(body))
                     return
                 m = re.fullmatch(r"/v1/mod/builds/([0-9a-f]{6,12})/report", u.path)
                 if m:

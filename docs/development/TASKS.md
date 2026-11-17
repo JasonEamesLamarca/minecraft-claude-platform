@@ -41,7 +41,7 @@ evidence named. Unverified items say so.
 | `/ai ask` + `/ai status` by a player in game | ✅ | Maintainer, vanilla 1.21.1 client, 17 Nov 2026 |
 | `/ai status` over RCON shows nothing (async reply after RCON returns) | ⚠️ | Known limitation; works for players |
 
-## Phase 3 — Build actions ✅ (in-game player test pending)
+## Phase 3 — Build actions ✅
 | Task | Status | Evidence |
 | --- | --- | --- |
 | Action schema v1 + validator (denied blocks, no NBT/namespaces, bounds, size, budget, distance, protected areas, fail-closed) | ✅ | `test_plan.py` (52 tests) |
@@ -50,11 +50,28 @@ evidence named. Unverified items say so.
 | Mod: `/ai build|approve|cancel|undo|history`, block-state check at preview, particle outline, per-tick placement, structure snapshot + undo | ✅ | 12 JUnit tests; console lifecycle on the laptop (build → verify blocks → undo → verify restored) |
 | Old mod jars removed on upgrade (`REMOVE_OLD_MODS_INCLUDE=mcai-fabric-*.jar`) | ✅ | 0.2.0 → 0.3.0 upgrade on the laptop |
 | Operational test: build lifecycle + forbidden-block rejection | ✅ | Local run 17 Nov 2026 |
-| In-game build by the owner (preview outline, approve, undo) | ⏳ | **Needs maintainer** |
+| In-game build by the owner (preview outline, approve, undo) | ✅ | Maintainer, in game, 17 Nov 2026 |
 
-## Phase 4 — Management, RBAC, audit ⏳
-Management API, roles (incl. builder role replacing the op-level check), UUID identities, audit log, SSH gateway,
-`mcai` CLI, TUI port, pruning of undo snapshots.
+## Phase 4 — Management, RBAC, audit ✅ (maintainer checks pending)
+| Task | Status | Evidence |
+| --- | --- | --- |
+| Six roles, permission matrix, assignment rules (below you, below your role, no self, owners only from the host) | ✅ | `test_rbac_keys.py`, `test_admin_escalation_attempts_fail` |
+| Player identities by UUID (join/leave tracking, sessions, owner bootstrap from `MC_OWNER` in online mode) | ✅ | `test_management.py` identity tests |
+| `/ai build` needs the builder role (replaces `AI_BUILD_MIN_OP_LEVEL`); staff decide on anyone's builds | ✅ | `test_build_flow.py` (21 tests) |
+| Management API in the gateway: 37 commands (status, players, whitelist, logs, server, AI, audit, accounts, backups) | ✅ | `test_management.py` (36 tests incl. fake RCON) |
+| SSH gateway container (unprivileged OpenSSH, ForceCommand, no PTY/forwarding, key sync, auth events audited) | ✅ | `test_ssh_gateway_is_locked_down`; operational test; manual bypass probes on the laptop |
+| `mcai` CLI (Linux/macOS/Windows, pinned host keys, RPC mode for the TUI) | ✅ | `test_cli.py`; used against the laptop stack |
+| Wizard: management token, owner SSH key, bind address, host key printed; mod checksum recreates the server | ✅ | `test_setup_wizard.py` |
+| Hash-chained daily audit files, retention, export (jsonl/csv), verify | ✅ | audit tests in `test_management.py` |
+| Account ↔ player linking (`mcai link`, `/ai link <code>`) | ✅ | `test_link_code` |
+| Server health from the mod (TPS, heap, players) | ✅ | `test_sessions_and_heartbeat`; laptop |
+| Undo snapshot pruning (after undo; after `AI_UNDO_KEEP_DAYS`) | ✅ | pruning tests; operational test (file deleted after undo) |
+| `mcai server restart` (RCON stop + restart policy) | ✅ | Laptop, 17 Nov 2026 |
+| Host-only role changes (`scripts/set-role.sh`) | ✅ | `test_host_admin_sets_owner` |
+| Join with a real client: owner role assigned, `/ai link`, builder role for a second player | ⏳ | **Needs maintainer** |
+| Stack lifecycle (stop/start), restore and upgrades over SSH | ⚠️ | Deliberately host-only (no Docker socket); see ADR-0010 |
+| 4b: `mcai tui` (port of `mc-admin`: log + command line, players, AI queue, status bar) over one RPC session | ✅ | `test_tui.py` (headless); smoke test against the laptop stack |
+| Interactive Claude Code session from the console | ⚠️ | Not offered: it needs a PTY inside the platform, which ADR-0010 rules out. Revisit with a sandboxed design |
 
 ## Phase 5 — Automation engine ⏳
 ## Phase 6 — Atlantis (original; Lite + Full; examples CLI) ⏳

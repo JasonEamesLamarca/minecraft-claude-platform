@@ -3,8 +3,7 @@
 # Minecraft EULA, and validates this file. Then: docker compose up -d
 #
 # Images are pinned by tag AND digest (multi-arch: amd64 + arm64). Dependabot proposes updates.
-# Services added in later phases (gateway, ai-worker, automation, management, ssh-gateway) join the
-# `internal` network; only the game port (and later the SSH gateway port) is published.
+# Services talk over the `internal` network. Only the game port and the SSH gateway port are published.
 
 name: ${COMPOSE_PROJECT_NAME:-mcai}
 
@@ -75,6 +74,8 @@ services:
       MCAI_ASK_PERMISSION_LEVEL: "${MCAI_ASK_PERMISSION_LEVEL:-0}"
       MCAI_ALLOW_CONSOLE: "${MCAI_ALLOW_CONSOLE:-true}"
       MCAI_BLOCKS_PER_TICK: "${MCAI_BLOCKS_PER_TICK:-2000}"
+      # Checksum of the mod jar (set by setup.sh): a new jar changes it, so `up` recreates the server.
+      MCAI_MOD_BUILD: "${MCAI_MOD_BUILD:-}"
     secrets:
       - rcon_password
       - gateway_mod_token
@@ -154,7 +155,17 @@ services:
       AI_DAILY_BUDGET_USD: "${AI_DAILY_BUDGET_USD:-2.00}"
       AI_REQUEST_TIMEOUT_SECONDS: "${AI_REQUEST_TIMEOUT_SECONDS:-180}"
       AUDIT_LOG_TEXT: "${AUDIT_LOG_TEXT:-false}"
-      AI_BUILD_MIN_OP_LEVEL: "${AI_BUILD_MIN_OP_LEVEL:-4}"
+      AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-365}"
+      AI_UNDO_KEEP_DAYS: "${AI_UNDO_KEEP_DAYS:-7}"
+      # Roles: MC_OWNER becomes the owner at its first join (online mode only); then UUIDs count.
+      MC_OWNER: "${MC_OWNER}"
+      MC_ONLINE_MODE: "${MC_ONLINE_MODE:-true}"
+      GATEWAY_MANAGEMENT_TOKEN_FILE: /run/secrets/management_token
+      RCON_HOST: minecraft
+      RCON_PORT: "25575"
+      RCON_PASSWORD_FILE: /run/secrets/rcon_password
+      MC_LOGS_DIR: /mc-logs
+      BACKUPS_DIR: /backups
       AI_BUILD_TIMEOUT_SECONDS: "${AI_BUILD_TIMEOUT_SECONDS:-420}"
       AI_APPROVE_TTL_SECONDS: "${AI_APPROVE_TTL_SECONDS:-900}"
       AI_BUILD_MAX_BLOCKS: "${AI_BUILD_MAX_BLOCKS:-40000}"
@@ -165,10 +176,15 @@ services:
     secrets:
       - gateway_mod_token
       - worker_token
+      - management_token
+      - rcon_password
     networks:
       - internal
     volumes:
       - "${GATEWAY_DATA_DIR:-./data/gateway}:/data"
+      # read-only: server log (mcai logs) and backup list (mcai backups list)
+      - "${MC_DATA_DIR:-./data/minecraft}/logs:/mc-logs:ro"
+      - "${BACKUP_DIR:-./backups}:/backups:ro"
     mem_limit: 256m
     cpus: "0.5"
     pids_limit: 128
@@ -213,6 +229,44 @@ services:
     cpus: "1.0"
     pids_limit: 256
 
+  # SSH gateway for administration: keys only, forced command, no shell/PTY/forwarding. Talks to the gateway's
+  # management API; holds no Docker socket, world data or AI credential.
+  ssh-gateway:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: containers/management/Dockerfile
+      args:
+        PUID: "${PUID}"
+        PGID: "${PGID}"
+    image: mcai-ssh-gateway:${MCAI_VERSION:-dev}
+    user: "${PUID}:${PGID}"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,uid=${PUID},gid=${PGID},mode=0700
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      GATEWAY_URL: http://gateway:8080
+      MANAGEMENT_TOKEN_FILE: /run/secrets/management_token
+      MCAI_SSH_IDLE_TIMEOUT: "${MCAI_SSH_IDLE_TIMEOUT:-1800}"
+      TZ: "${TZ:-UTC}"
+    secrets:
+      - management_token
+    ports:
+      # 127.0.0.1 = this computer only. setup.sh asks whether other computers may connect.
+      - "${MCAI_SSH_BIND:-127.0.0.1}:${MCAI_SSH_PORT:-2222}:2222"
+    networks:
+      - edge
+      - internal
+    volumes:
+      - "${SSH_GATEWAY_DATA_DIR:-./data/ssh-gateway}:/data"
+    mem_limit: 128m
+    cpus: "0.5"
+    pids_limit: 64
+
 networks:
   # Published game port + outbound internet (Mojang auth, mod downloads).
   edge: {}
@@ -231,3 +285,5 @@ secrets:
     file: ./secrets/worker_token
   ai_credential:
     file: ./secrets/ai_credential
+  management_token:
+    file: ./secrets/management_token
