@@ -10,8 +10,9 @@ description = "Claude Code OAuth token"
 regex = '''sk-ant-oat\d{2}-[A-Za-z0-9_\-]{20,}'''
 tags = ["anthropic"]
 
+# Upper-case variable names only (case-sensitive), so code such as `rcon_password=settings...` doesn't match.
 [[rules]]
 id = "assigned-secret-in-env"
 description = "Non-empty secret assigned in an env-style file"
-regex = '''(?i)(RCON_PASSWORD|GATEWAY_MOD_TOKEN|ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)[ \t]*[=:][ \t]*["']?[A-Za-z0-9_\-\.]{12,}'''
+regex = '''\b(RCON_PASSWORD|GATEWAY_MOD_TOKEN|WORKER_TOKEN|MANAGEMENT_TOKEN|ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)[ \t]*[=:][ \t]*["']?[A-Za-z0-9_\-\.]{12,}'''
 tags = ["config"]
