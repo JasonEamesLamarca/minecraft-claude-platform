@@ -1,0 +1,25 @@
+# Weekly repair: places the installed Atlantis again where blocks were broken or changed. Only cells that differ
+# are touched, and the original undo snapshots are kept. This changes the world, so it is privileged: an
+# admin can create it, but it runs only after the owner approves it ('mcai automations approve atlantis-restore').
+id = "atlantis-restore"
+name = "Atlantis restore"
+description = "Every Monday at 05:00, repairs the installed Atlantis and tells staff."
+timezone = "Europe/Berlin"
+enabled = false
+
+[trigger]
+schedule = "0 5 * * mon"
+
+[[actions]]
+type = "example_restore"
+example = "atlantis-lite"
+
+[[actions]]
+type = "notify_role"
+min_role = "operator"
+text = "Atlantis is being repaired (weekly restore). Expect some lag for a minute or two."
+
+[limits]
+on_error = "stop"
+retries = 2
+retry_delay_s = 600

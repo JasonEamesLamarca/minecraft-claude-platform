@@ -1,0 +1,13 @@
+{
+  "_doc": "Vertical layout of the generated volume (world heights). The packs are position-independent: the installer chooses x/z and the floor height. These values set the design's water line and dome budget.",
+  "name": "default",
+  "minecraft": "1.21.1",
+  "data_version": 3955,
+  "floor_y": -56,
+  "world_min_y": -64,
+  "water_top_y": 62,
+  "water_cover_min": 5,
+  "edge_seabed_y": 45,
+  "structure_namespace": "mcai",
+  "structure_dir": "atlantis"
+}

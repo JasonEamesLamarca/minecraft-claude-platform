@@ -1,6 +1,6 @@
 # Minecraft AI Platform
 
-> **Status: pre-alpha, Phase 5.** What works today:
+> **Status: pre-alpha, Phase 6.** What works today:
 >
 > - a hardened Fabric server with backups and a setup wizard;
 > - **`/ai ask`** for questions;
@@ -8,10 +8,12 @@
 > - **roles** per player UUID (builder, operator, admin…);
 > - **remote administration** with the `mcai` command line over a locked-down SSH gateway, with a tamper-evident
 >   audit log;
-> - **automations** on events or schedules, with 11 [examples](automation-examples/).
+> - **automations** on events or schedules, with 11 [examples](automation-examples/);
+> - **[Atlantis](examples/atlantis/README.md)**, an original underwater city you can download, verify, install and
+>   roll back with `mcai examples`.
 >
 > Read [installation](docs/installation/README.md) and [administration](docs/administration/README.md) to get
-> started. Atlantis is still being built.
+> started.
 > [`docs/development/TASKS.md`](docs/development/TASKS.md) tracks what actually works.
 
 ## Quick start (what works now)
@@ -38,8 +40,9 @@ A self-hosted, Docker Compose–based platform that connects a Minecraft Java Ed
   token guards. Claude can propose an automation, but a human approves it.
 - **SSH management console (`mcai`).** Key-only access with restricted commands, role-based access control and an
   audit log. There is no host shell and no Docker socket in untrusted containers.
-- **Atlantis example.** An original underwater city that can be downloaded, verified and installed with
-  `mcai examples install atlantis`.
+- **Atlantis example.** An original underwater city (Lite: a quick cutaway; Full: the whole domed city) that is
+  downloaded, verified against pinned checksums, installed with undo snapshots and rolled back with
+  `mcai examples`.
 
 ## Architecture
 
@@ -66,7 +69,7 @@ Details: [`docs/architecture/overview.md`](docs/architecture/overview.md) and th
 | `minecraft-mod/` | Server-side Fabric mod (`/ai` commands, events to the gateway) |
 | `management-cli/` | `mcai` command-line client and terminal UI |
 | `automation-examples/` | Example automation definitions |
-| `examples/atlantis/` | Atlantis manifest, automations and screenshots. Schematics ship as release assets. |
+| `examples/` | `catalog.json` (packs and pinned checksums) and `atlantis/`: the generator, automations, renders. Pack files ship as release assets. |
 | `docs/` | Architecture, installation, administration, security, development |
 | `scripts/` | Setup wizard and maintenance scripts |
 | `tests/` | Unit, integration, security and operational tests |

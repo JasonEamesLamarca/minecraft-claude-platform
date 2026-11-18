@@ -1,0 +1,22 @@
+"""Modules the orchestrator imports to get features. Each module registers its Features on import."""
+GENERATORS = [
+    'atlantis.terrain',
+    'atlantis.foundation',
+    'atlantis.dome',
+    'atlantis.fabric',
+    'atlantis.roads',
+    'atlantis.tower',
+    'atlantis.tower_interior',
+    'atlantis.landmark_landing',
+    'atlantis.landmark_fountain',
+    'atlantis.landmark_power',
+    'atlantis.landmark_command',
+    'atlantis.district_medical_water',
+    'atlantis.district_infill',
+    'atlantis.district_residential',
+    'atlantis.district_civic',
+    'atlantis.ocean_env',
+    'atlantis.detail',
+    'atlantis.district_perimeter',
+    'atlantis.landmark_observation',
+]

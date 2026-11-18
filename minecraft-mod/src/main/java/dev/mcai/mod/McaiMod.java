@@ -45,6 +45,7 @@ public final class McaiMod implements DedicatedServerModInitializer {
     private McaiConfig config;
     private GatewayClient gateway;
     private BuildExecutor builds;
+    private ExamplePlacer examples;
     private volatile MinecraftServer server;
     private final Map<UUID, String> online = new HashMap<>();
     private final AreaWatcher areas = new AreaWatcher();
@@ -62,6 +63,8 @@ public final class McaiMod implements DedicatedServerModInitializer {
         instance = this;
         builds = new BuildExecutor((id, report) -> gateway.post("/v1/mod/builds/" + id + "/report", report),
                 Integer.parseInt(System.getenv().getOrDefault("MCAI_BLOCKS_PER_TICK", "2000")));
+        examples = new ExamplePlacer((id, report) -> gateway.post("/v1/mod/examples/" + id + "/report", report),
+                path -> gateway.getBytes(path, ExamplePlacer.MAX_FILE_BYTES));
         CommandRegistrationCallback.EVENT.register((dispatcher, registries, env) -> register(dispatcher));
         ServerLifecycleEvents.SERVER_STARTED.register(s -> {
             server = s;
@@ -72,6 +75,7 @@ public final class McaiMod implements DedicatedServerModInitializer {
         ServerLifecycleEvents.SERVER_STOPPING.register(s -> gateway.stop());
         ServerTickEvents.END_SERVER_TICK.register(s -> {
             builds.tick(s);
+            examples.tick(s);
             if (s.getTicks() % 20 == 0) {
                 trackPlayers(s);
             }
@@ -327,6 +331,7 @@ public final class McaiMod implements DedicatedServerModInitializer {
         world.addProperty("raining", overworld.isRaining());
         world.addProperty("thundering", overworld.isThundering());
         o.add("world", world);
+        o.addProperty("example_job", examples.current());
         gateway.post("/v1/mod/heartbeat", o).thenAccept(r -> {
             if (r.has("areas")) {
                 areas.setAreas(AreaWatcher.parse(r.get("areas")));
@@ -356,6 +361,10 @@ public final class McaiMod implements DedicatedServerModInitializer {
                     case "execute" -> builds.execute(server, event);
                     case "rollback" -> builds.rollback(server, event);
                     case "prune" -> builds.prune(server, event);
+                    case "example_place" -> examples.place(server, event);
+                    case "example_rollback" -> examples.rollback(server, event);
+                    case "example_cancel" -> examples.cancel(event);
+                    case "example_forget" -> examples.forget(server, event);
                     case "preview" -> preview(event);
                     case "broadcast" -> broadcast(event);
                     default -> message(event);

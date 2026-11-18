@@ -5,7 +5,31 @@ and the project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor 
 
 ## [Unreleased]
 
+### Fixed
+- The gateway's threads shared one SQLite connection without serializing reads; concurrent requests could fail
+  with `InterfaceError` (seen when the mod downloads and reports at the same time). Every statement now runs
+  under one lock (`test_concurrent_mod_calls`).
+- `gateway`, `ai-worker` and `ssh-gateway` now run with `init: true`. Without a reaping PID 1, finished SSH
+  sessions left zombies until the ssh-gateway's `pids_limit` (64) was reached and new sessions failed.
+
 ### Added
+- Phase 6, example builds (ADR-0012):
+  - **Atlantis**, an original underwater city by the project's own generator (`examples/atlantis/generator`,
+    stdlib Python, 25 test files). Franchise-specific elements of the private original were replaced by new
+    designs (Trident Arch with Plato's rings, manta skiffs, orichalcum Crystal Hall, navigation room with orrery).
+  - **Packs**: deterministic Sponge v3 `.schem` sections with a manifest (SHA-256, offsets, places of interest).
+    Atlantis Lite (a sealed 96 x 768 cutaway: tower, Fountain Plaza district, pier, dome wall, sea; 0.2 MB) and
+    Atlantis Full (90 sections, 255 million blocks, 4.7 MB). `scripts/build-examples.sh` builds them and pins the
+    hashes in `examples/catalog.json`.
+  - **`mcai examples …`**: list, catalog, info, download (client-side, allowlisted GitHub release URLs, pinned
+    hashes, `--from` for local builds), validate, delete, install (preview, then `--yes`), installs, status,
+    repair, rollback, cancel, forget. Permissions `examples.read`, `examples.manage`, `examples.install`.
+  - **Gateway**: strict manifest schema; bounded gzip/NBT parsing; deny-list; no block entities or entities;
+    install checks for world height, protected areas, overlap and size; one job at a time; interruption handling.
+  - **Mod 0.6.0**: `ExamplePlacer` places packs chunk by chunk with undo snapshots, changing only differing
+    blocks (`EXAMPLES_BLOCKS_PER_TICK`), and restores them on rollback.
+  - **Automations**: areas that follow an example's install, `example_tour` and (privileged) `example_restore`
+    actions, and three Atlantis automations (arrival, tour, weekly restore).
 - Phase 5, automations (ADR-0011):
   - **Engine in the gateway.** Declarative TOML/JSON definitions with a trigger, conditions, up to 10 actions from
     a fixed list (message, broadcast, notify_role, log, status_report, save, world, set_role, ai_message,

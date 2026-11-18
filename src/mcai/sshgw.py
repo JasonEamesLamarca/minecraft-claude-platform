@@ -29,6 +29,7 @@ AUTH_KEYS = DATA / "authorized_keys"
 RUNTIME = Path("/tmp/mcai-sshgw.json")          # settings for dispatch (sshd gives sessions a clean environment)
 MAX_COMMAND = 8192
 MAX_INPUT = 64 * 1024                           # a file sent with --stdin (automation definitions)
+MAX_UPLOAD = 12 * 1024 * 1024                   # 'examples upload': one pack file, base64 (EXAMPLES_MAX_FILE_MB <= 8)
 MAX_RPC_LINE = MAX_INPUT + MAX_COMMAND + 1024
 
 LOG_PATTERNS = [
@@ -174,10 +175,12 @@ def dispatch() -> int:
         print("Could not parse the command (unbalanced quotes?).", file=sys.stderr)
         return 2
     base = {"key": key, "source_ip": source_ip, "session": session}
+    upload = (argv[1:3] if argv[:1] == ["--json"] else argv[:2]) == ["examples", "upload"]
     if "--stdin" in argv:
-        data = sys.stdin.read(MAX_INPUT + 1)
-        if len(data) > MAX_INPUT:
-            print(f"Input larger than {MAX_INPUT // 1024} KB.", file=sys.stderr)
+        cap = MAX_UPLOAD if upload else MAX_INPUT
+        data = sys.stdin.read(cap + 1)
+        if len(data) > cap:
+            print(f"Input larger than {cap // 1024} KB.", file=sys.stderr)
             return 2
         base["input"] = data
     if argv == ["rpc"]:
@@ -190,7 +193,7 @@ def dispatch() -> int:
         argv = [a for a in argv if a not in ("--follow", "-f")]
         return follow_logs(api, base, argv, as_json)
     try:
-        r = api.call("POST", "/v1/mgmt/run", {**base, "argv": argv})
+        r = api.call("POST", "/v1/mgmt/upload" if upload else "/v1/mgmt/run", {**base, "argv": argv})
     except OSError:
         print("The management service is not reachable (is the gateway running?).", file=sys.stderr)
         return 3

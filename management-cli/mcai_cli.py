@@ -9,6 +9,7 @@ Needs Python 3.9+ and the OpenSSH client (`ssh`; built into Windows 10+ and macO
   mcai players role Alex builder
   mcai logs -n 50          mcai logs --follow
   mcai automations import welcome.toml     (definition files are read here and sent to the server)
+  mcai examples download atlantis-lite      (downloads here, checks every checksum, sends it to the server)
   mcai help                (everything the server offers; what you may run depends on your role)
 
 Local commands: remote add|list|remove|default, version, tui (full-screen console; once: mcai tui --install). Everything else runs on the server, which checks your
@@ -29,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 MAX_FILE = 64 * 1024
 FILE_COMMANDS = {("automations", "import"), ("automations", "validate"), ("auto", "import"), ("auto", "validate")}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
@@ -153,6 +154,135 @@ def file_argument(argv: list[str]) -> tuple[list[str], str | None]:
         raise SystemExit(f"{path} is not UTF-8 text.") from None
     rest = [a for a in rest if a != paths[0]]
     return argv[:2] + ["--stdin"] + rest, text
+
+
+# ------------------------------------------------------------------ example packs (downloaded here, not by the server)
+# Same rules as the gateway (src/mcai/examples.py): this project's GitHub release downloads only, https, and the
+# GitHub asset hosts only as redirect targets. The server has no internet access, so the client fetches.
+DOWNLOAD_HOSTS = ("github.com",)
+REDIRECT_HOSTS = ("objects.githubusercontent.com", "release-assets.githubusercontent.com")
+RELEASE_PATH_RE = re.compile(r"^/[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}/releases/download/[A-Za-z0-9._+-]{1,100}/"
+                             r"[A-Za-z0-9._-]{1,100}$")
+PACK_FILE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\.schem$")
+MAX_DOWNLOAD = 8 * 1024 * 1024
+
+
+def allowed_url(url: str, redirect: bool = False) -> bool:
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+    except ValueError:
+        return False
+    if u.scheme != "https" or u.username or u.password or u.port not in (None, 443):
+        return False
+    if any(seg in (".", "..") for seg in u.path.split("/")):
+        return False
+    if redirect:
+        return u.hostname in REDIRECT_HOSTS or (u.hostname in DOWNLOAD_HOSTS and bool(RELEASE_PATH_RE.match(u.path)))
+    return u.hostname in DOWNLOAD_HOSTS and bool(RELEASE_PATH_RE.match(u.path)) and not u.query
+
+
+def fetch(url: str, limit: int = MAX_DOWNLOAD) -> bytes:
+    """Download with every redirect checked against the allowlist and a size cap."""
+    import urllib.request
+
+    class Guard(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            if not allowed_url(newurl, redirect=True):
+                raise SystemExit(f"Refusing a redirect to {newurl.split('?')[0]} (not an allowed download host).")
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    if not allowed_url(url):
+        raise SystemExit(f"Refusing to download {url}: only this project's GitHub release files are allowed.")
+    opener = urllib.request.build_opener(Guard)
+    req = urllib.request.Request(url, headers={"User-Agent": f"mcai/{__version__}", "Accept": "application/octet-stream"})
+    try:
+        with opener.open(req, timeout=60) as r:
+            data = r.read(limit + 1)
+    except OSError as e:
+        raise SystemExit(f"Download failed: {url} ({e})") from None
+    if len(data) > limit:
+        raise SystemExit(f"{url} is larger than {limit // (1024 * 1024)} MB.")
+    return data
+
+
+def _server_json(cfg: Config, name: str, r: dict, argv: list[str], data: bytes | None = None) -> dict:
+    cmd = ssh_command(cfg, name, r, ["--json"] + argv)
+    p = subprocess.run(cmd, input=base64.b64encode(data) if data is not None else b"", capture_output=True)
+    try:
+        return json.loads(p.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        err = p.stderr.decode("utf-8", "replace").strip()
+        raise SystemExit(err or "No answer from the server.") from None
+
+
+def _local_file(src: Path, pid: str, name: str) -> bytes:
+    """A pack file from a local folder: dist/examples (<pack>/<file>) or a release folder (flat)."""
+    for p in (src / pid / name, src / name, src / f"{pid}-{name}" if name == "manifest.json" else src / "-"):
+        if p.is_file():
+            data = p.read_bytes()
+            if len(data) > MAX_DOWNLOAD:
+                raise SystemExit(f"{p} is larger than {MAX_DOWNLOAD // (1024 * 1024)} MB.")
+            return data
+    raise SystemExit(f"{name} of {pid} not found in {src}")
+
+
+def examples_download(cfg: Config, remote: str | None, args: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="mcai examples download",
+                                 description="Download an example pack, check it, and send it to the server.")
+    ap.add_argument("pack")
+    ap.add_argument("--version")
+    ap.add_argument("--from", dest="source", help="use a local folder (e.g. dist/examples from "
+                                                   "scripts/build-examples.sh) instead of the internet")
+    ns = ap.parse_args(args)
+    name, r = cfg.remote(remote)
+    res = _server_json(cfg, name, r, ["examples", "catalog"])
+    if not res.get("ok"):
+        raise SystemExit(res.get("text", "The server refused the catalog request."))
+    entries = [e for e in (res.get("data") or {}).get("catalog", []) if e.get("id") == ns.pack
+               and (ns.version is None or e.get("version") == ns.version)]
+    entry = entries[0] if entries else None
+    if entry is None and not ns.source:
+        raise SystemExit(f"'{ns.pack}' is not in the server's catalog (see 'mcai examples list').")
+    if ns.source:
+        src = Path(ns.source)
+        manifest = _local_file(src, ns.pack, "manifest.json")
+    else:
+        manifest = fetch(entry["manifest_url"], 256 * 1024)
+    sha = hashlib.sha256(manifest).hexdigest()
+    official = entry is not None and sha == entry["manifest_sha256"]
+    if not official and not ns.source:
+        raise SystemExit(f"The downloaded manifest doesn't match the checksum the server expects for {ns.pack} "
+                         f"({sha[:12]}... instead of {entry['manifest_sha256'][:12]}...). Nothing was sent.")
+    if not official:
+        print(f"Note: this is a local, unofficial build of {ns.pack} (its manifest isn't the one in the catalog). "
+              f"The server checks it the same way and labels it unofficial.")
+    try:
+        m = json.loads(manifest)
+        pid, ver, sections = m["id"], m["version"], m["sections"]
+    except (ValueError, KeyError, TypeError):
+        raise SystemExit("The manifest is not valid.") from None
+    if pid != ns.pack or not all(isinstance(x, dict) and PACK_FILE_RE.match(str(x.get("file", ""))) for x in sections):
+        raise SystemExit("The manifest doesn't describe this pack, or names files in a way that isn't allowed.")
+    up = _server_json(cfg, name, r, ["examples", "upload", pid, ver, "manifest.json", "--stdin"], manifest)
+    if not up.get("ok"):
+        if up.get("code") == "exists":
+            print(up.get("text"))
+            return 0
+        raise SystemExit(up.get("text", "The server refused the manifest."))
+    print(up.get("text"))
+    base = entry["manifest_url"].rsplit("/", 1)[0] if entry and not ns.source else None
+    for i, sec in enumerate(sections, 1):
+        data = _local_file(Path(ns.source), pid, sec["file"]) if ns.source else fetch(f"{base}/{sec['file']}")
+        if hashlib.sha256(data).hexdigest() != sec.get("sha256") or len(data) != sec.get("bytes"):
+            raise SystemExit(f"{sec['file']}: checksum or size doesn't match the manifest. Stopped; nothing of it "
+                             f"was installed.")
+        up = _server_json(cfg, name, r, ["examples", "upload", pid, ver, sec["file"], "--stdin"], data)
+        if not up.get("ok"):
+            raise SystemExit(up.get("text", f"The server refused {sec['file']}."))
+        print(f"[{i}/{len(sections)}] {up.get('text')}", flush=True)
+    print(f"Next: mcai examples info {pid}   then   mcai examples install {pid} --at X Y Z")
+    return 0
 
 
 # ------------------------------------------------------------------ the full-screen console
@@ -282,6 +412,8 @@ def main(argv: list[str] | None = None) -> int:
         return install_tui()
     if argv[:1] == ["tui"]:
         return start_tui(cfg, remote)
+    if argv[:2] == ["examples", "download"] and "-h" not in argv and "--help" not in argv:
+        return examples_download(cfg, remote, argv[2:])
     name, r = cfg.remote(remote)
     argv, text = file_argument(argv)
     cmd = ssh_command(cfg, name, r, (["--json"] if as_json else []) + (argv or ["help"]))

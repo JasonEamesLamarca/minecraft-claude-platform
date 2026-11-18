@@ -219,6 +219,11 @@ def _coords(v, where: str) -> list:
 
 
 def _area(v, where: str) -> dict:
+    if isinstance(v, dict) and "example" in v:
+        # the area of an installed example pack (its latest placed install), resolved when the mod asks
+        _keys(v, {"name", "example"}, where, {"example"})
+        return {"name": _str(v.get("name", v["example"]), where + ".name", 32, WORD_RE),
+                "example": _str(v["example"], where + ".example", 40, ID_RE)}
     _keys(v, {"name", "dimension", "from", "to"}, where, {"from", "to"})
     a = {"name": _str(v.get("name", "area"), where + ".name", 32, WORD_RE),
          "dimension": _str(v.get("dimension", "minecraft:overworld"), where + ".dimension", 100, DIM_RE),
@@ -369,9 +374,17 @@ def _action(a: dict, i: int, has_subject: bool, placeholders: set, ai_allowed: b
         return ({"type": t, "prompt": _template(a["prompt"], where + ".prompt", placeholders, MAX_PROMPT),
                  "dimension": _str(a.get("dimension", "minecraft:overworld"), where + ".dimension", 100, DIM_RE),
                  "at": _coords(a["at"], where + ".at")}, {"ai.build"}, True)
+    if t == "example_tour":
+        _keys(a, {"type", "example"}, where, {"example"})
+        need_subject()
+        return {"type": t, "example": _str(a["example"], where + ".example", 40, ID_RE)}, {"players.moderate"}, False
+    if t == "example_restore":
+        _keys(a, {"type", "example"}, where, {"example"})
+        return ({"type": t, "example": _str(a["example"], where + ".example", 40, ID_RE)}, {"examples.install"},
+                True)
     raise DefinitionError(f"{where}: unknown action type {t!r} (allowed: message, broadcast, notify_role, log, "
-                          "status_report, save, world, set_role, ai_message, ai_build). Automations can't run "
-                          "commands or code.")
+                          "status_report, save, world, set_role, ai_message, ai_build, example_tour, "
+                          "example_restore). Automations can't run commands or code.")
 
 
 def parse_definition(data: dict, default_tz: str = "UTC") -> Definition:
@@ -450,13 +463,14 @@ def render(template: str, values: dict) -> str:
 # ====================================================================== engine
 class Engine:
     def __init__(self, gw, now=time.time, default_tz: str = "UTC", max_runs_per_minute: int = 30,
-                 ai_calls_per_hour: int = 10, examples_dir: Path | None = None):
+                 ai_calls_per_hour: int = 10, examples_dir: Path | None = None, extra_example_dirs=()):
         self.gw, self.store = gw, gw.store
         self.now = now
         self.default_tz = default_tz
         self.max_runs_per_minute = max_runs_per_minute
         self.ai_calls_per_hour = ai_calls_per_hour
         self.examples_dir = examples_dir
+        self.extra_example_dirs = list(extra_example_dirs)
         self.lock = threading.RLock()
         self.defs: dict[str, Definition] = {}
         self.recent: deque[float] = deque()
@@ -640,10 +654,11 @@ class Engine:
 
     def examples(self) -> list[dict]:
         out = []
-        d = self.examples_dir
-        if not d or not Path(d).is_dir():
-            return out
-        for p in sorted(Path(d).glob("*.toml")):
+        paths = []
+        for d in [self.examples_dir, *self.extra_example_dirs]:
+            if d and Path(d).is_dir():
+                paths += sorted(Path(d).glob("*.toml"))
+        for p in paths:
             try:
                 defn = parse_definition(parse_text(p.read_text(encoding="utf-8")), self.default_tz)
                 out.append({"file": p.name, "id": defn.id, "name": defn.name, "description": defn.description,
@@ -760,12 +775,21 @@ class Engine:
             return {d.trigger["name"] for d in self.defs.values() if d.event == "player.trigger"}
 
     def areas(self) -> list[dict]:
-        """Areas the mod must watch: one per enabled area automation (the id is the automation id)."""
+        """Areas the mod must watch: one per enabled area automation (the id is the automation id). An area that
+        names an example pack follows its latest placed install, and is left out while there is none."""
         with self.lock:
-            return [{"id": aid, "on": "enter" if d.event == "player.enter_area" else "leave",
-                     "dimension": d.trigger["area"]["dimension"], "from": d.trigger["area"]["from"],
-                     "to": d.trigger["area"]["to"]}
-                    for aid, d in self.defs.items() if d.event in ("player.enter_area", "player.leave_area")][:200]
+            items = [(aid, d) for aid, d in self.defs.items() if d.event in ("player.enter_area", "player.leave_area")]
+        out = []
+        for aid, d in items:
+            a = d.trigger["area"]
+            if "example" in a:
+                ex = getattr(self.gw, "examples", None)
+                a = ex.area(a["example"]) if ex else None
+                if a is None:
+                    continue
+            out.append({"id": aid, "on": "enter" if d.event == "player.enter_area" else "leave",
+                        "dimension": a["dimension"], "from": a["from"], "to": a["to"]})
+        return out[:200]
 
     def area_name(self, aid: str) -> str | None:
         with self.lock:
@@ -1025,6 +1049,24 @@ class Engine:
             rid = self.gw.enqueue_internal("build", render(a["prompt"], values), run["id"],
                                            context={"dimension": a["dimension"], "x": x, "y": y, "z": z, "yaw": 0})
             return f"build request {rid} queued; staff approve it with 'mcai ai approve {rid}'"
+        if t == "example_tour":
+            stops = self.gw.examples.tour(a["example"])
+            if not stops:
+                raise ActionError(f"{a['example']} is not installed", retryable=False)
+            self._need_server()
+            for name, (x, y, z) in stops[:12]:
+                self.gw.notify(subject, f"{name}: {x} {y} {z}", "info")
+            return f"sent {len(stops[:12])} place(s) of {a['example']}"
+        if t == "example_restore":
+            from .examples import ExampleError
+            row = self.gw.examples.latest(a["example"])
+            if row is None:
+                raise ActionError(f"{a['example']} is not installed", retryable=False)
+            actor = rbac.Actor("account", f"automation:{aid}", f"automation:{aid}", "admin")
+            try:
+                return self.gw.examples.repair(actor, row["id"])
+            except ExampleError as e:
+                raise ActionError(e.message, retryable=e.code in ("busy", "unavailable")) from None
         raise ActionError(f"unknown action {t}", retryable=False)
 
     def _set_role(self, aid: str, run, role: str, subject: str | None) -> str:

@@ -1,0 +1,36 @@
+{
+  "_doc": "World-independent design settings. Lengths in blocks, city-local coordinates (see ATLANTIS_ARCHITECTURE.md).",
+  "seed": 1994,
+  "detail": "standard",
+  "city": {
+    "radius": 560,
+    "district_count": 10,
+    "road_width_major": 11,
+    "road_width_minor": 5,
+    "building_density": 0.55,
+    "height_margin_under_dome": 6
+  },
+  "dome": {
+    "radius": 600,
+    "height_max": 450,
+    "thickness": 2,
+    "rib_count": 24,
+    "band_count": 4
+  },
+  "tower": {
+    "height_ratio": 0.88,
+    "min_clearance": 10,
+    "base_radius": 34
+  },
+  "environment": {
+    "exterior_margin": 200,
+    "seabed_relief": 14
+  },
+  "lighting": {
+    "intensity": 1.0,
+    "min_walkable_block_light": 1
+  },
+  "tiles": {
+    "size": 32
+  }
+}

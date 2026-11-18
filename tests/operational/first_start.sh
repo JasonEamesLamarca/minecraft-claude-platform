@@ -169,6 +169,56 @@ M automations runs | grep -q 'optest-night'
 if docker compose logs minecraft | grep -qi 'mixin.*\(error\|fail\)'; then echo "mixin problem in server log"; exit 1; fi
 echo "ok: automations imported, run, refused and triggered by a world event"
 
+step "examples: Atlantis Lite through the mcai client (local build), checked, installed, rolled back"
+scripts/build-examples.sh lite >/dev/null            # deterministic: matches examples/catalog.json -> official
+M examples download atlantis-lite --from dist/examples | grep -q 'ready to install'
+M examples list | grep -qE 'atlantis-lite +1\.0\.0 +ready '
+M automations examples | grep -q 'atlantis-tour'
+AX=2000; AY=-56; AZ=2000                               # far from spawn, recommended floor height
+# probe blocks: a few distinctive cells of the pack, as world coordinates "x y z block"
+probes="$(python3 - "$AX" "$AY" "$AZ" <<'PY'
+import json, sys
+sys.path.insert(0, "examples/atlantis/generator")
+from atlantis import schem
+ax, ay, az = map(int, sys.argv[1:])
+m = json.load(open("dist/examples/atlantis-lite/manifest.json"))
+want = {"minecraft:sea_lantern", "minecraft:quartz_block", "minecraft:chiseled_quartz_block"}
+out = []
+for sec in m["sections"][::2]:
+    s, states, cells = schem.decode(open("dist/examples/atlantis-lite/" + sec["file"], "rb").read())
+    w, h, l = sec["size"]
+    for i in range(0, len(cells), 9973):
+        st = states[cells[i]]
+        if st in want:
+            x, z, y = i % w, (i // w) % l, i // (w * l)
+            ox, oy, oz = sec["offset"]
+            out.append(f"{ax + ox + x} {ay + oy + y} {az + oz + z} {st}")
+            break
+print("\n".join(out))
+PY
+)"
+[[ $(wc -l <<<"$probes") -ge 2 ]] || { echo "no probe blocks found: $probes"; exit 1; }
+probe_count() { local n=0; while read -r x y z b; do is_block "$x" "$y" "$z" "$b" </dev/null && n=$((n+1)); done <<<"$probes"; echo $n; }
+while read -r x y z b; do R "forceload add $x $z" </dev/null >/dev/null; done <<<"$probes"; sleep 3   # exec -T would eat the loop input
+[[ $(probe_count) -eq 0 ]] || { echo "probe blocks already there before installing"; exit 1; }
+M examples install atlantis-lite --at $AX $AY $AZ | grep -q 'Re-run with --yes'
+M examples install atlantis-lite --at $AX $AY $AZ --yes | grep -q 'Started install'
+iid="$(M --json examples installs | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])')"
+set +e; out="$(M examples install atlantis-lite --at $AX $AY $AZ --yes 2>&1)"; set -e
+[[ "$out" == *"is placing"* || "$out" == *"overlap"* ]] || { echo "second install not refused: $out"; exit 1; }
+for _ in $(seq 1 180); do M examples status "$iid" | grep -q "atlantis-lite 1.0.0, placed" && break; sleep 5; done
+M examples status "$iid"
+M examples status "$iid" | grep -q "atlantis-lite 1.0.0, placed" || { echo "install did not finish"; exit 1; }
+[[ $(probe_count) -eq $(wc -l <<<"$probes") ]] || { echo "pack blocks missing after install"; exit 1; }
+echo "ok: Atlantis Lite installed ($(wc -l <<<"$probes") probe blocks present)"
+M examples rollback "$iid" --yes | grep -q 'Rolling back'
+for _ in $(seq 1 120); do M examples status "$iid" | grep -q ", rolled_back" && break; sleep 5; done
+M examples status "$iid" | grep -q ", rolled_back" || { echo "rollback did not finish"; exit 1; }
+[[ $(probe_count) -eq 0 ]] || { echo "pack blocks still there after rollback"; exit 1; }
+AUDIT | grep -q '"event": "examples.rolled_back"'
+while read -r x y z b; do R "forceload remove $x $z" </dev/null >/dev/null; done <<<"$probes"
+echo "ok: rolled back, the area is as before"
+
 step "isolation: only the game port and the SSH gateway (localhost) are published; the AI worker has no host mounts"
 bindings ssh-gateway | grep -q "\"HostIp\":\"127.0.0.1\",\"HostPort\":\"$SSH_PORT\"" \
   || { echo "ssh-gateway binding: $(bindings ssh-gateway)"; exit 1; }

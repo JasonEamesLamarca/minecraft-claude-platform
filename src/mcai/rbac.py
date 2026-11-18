@@ -40,6 +40,9 @@ PERMISSIONS: dict[str, set[str]] = {
     "automations.read": set(_READERS),     # list, show, run history
     "automations.manage": set(_ADMINS),    # create, change, enable, run, ask the AI for a proposal
     "automations.approve": {"owner"},      # approve privileged automations (roles, world changes)
+    "examples.read": set(_READERS),        # catalog, packs on the server, installs
+    "examples.manage": set(_ADMINS),       # upload (download through mcai), validate, delete packs
+    "examples.install": set(_ADMINS),      # place, repair, roll back an example in the world
 }
 
 

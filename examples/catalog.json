@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "version": "1.0.0",
+  "_doc": "Example packs the platform knows. 'mcai examples download <id>' fetches the manifest from manifest_url (this project's GitHub releases only), checks it against manifest_sha256, then fetches and checks every section. Regenerate with scripts/build-examples.sh.",
+  "packs": [
+    {
+      "id": "atlantis-lite",
+      "version": "1.0.0",
+      "title": "Atlantis Lite",
+      "description": "A 96-block-wide cutaway of the underwater city: the central tower, a district with the Fountain Plaza, a pier with landing pads, the dome wall and the sea floor. Quick to install (about a minute).",
+      "manifest_url": "https://github.com/JasonEamesLamarca/minecraft-claude-platform/releases/download/examples-1.0.0/atlantis-lite-manifest.json",
+      "manifest_sha256": "3ef597582b2c8f228eca9c0ac925734b6e44c24539a1ea8c800e46c81ec2e79d",
+      "release": "https://github.com/JasonEamesLamarca/minecraft-claude-platform/releases/tag/examples-1.0.0",
+      "total_bytes": 166428,
+      "total_blocks": 9363456,
+      "content_sha256": "9026407b8c12443713520c2ee32ffa8aded83a833ce1cb18f5e5640f7cd1ce7a"
+    },
+    {
+      "id": "atlantis-full",
+      "version": "1.0.0",
+      "title": "Atlantis Full",
+      "description": "The whole city under a 1,200-block glass dome: ten districts, six piers and the sea floor around it, in 90 sections. Needs a deep ocean about 1,600 x 1,600 blocks wide; take a backup first.",
+      "manifest_url": "https://github.com/JasonEamesLamarca/minecraft-claude-platform/releases/download/examples-1.0.0/atlantis-full-manifest.json",
+      "manifest_sha256": "fba94a5ec5e72fe4b3e5c742a339578c841eab1ba62550dfb0e49a3d243548fe",
+      "release": "https://github.com/JasonEamesLamarca/minecraft-claude-platform/releases/tag/examples-1.0.0",
+      "total_bytes": 4706963,
+      "total_blocks": 255342517,
+      "content_sha256": "1596b388e5427179134295d1e3972f3c313bda3522822ca1fb45eb1ab9b41e92"
+    }
+  ]
+}

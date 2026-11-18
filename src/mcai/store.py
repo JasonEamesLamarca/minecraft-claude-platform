@@ -127,6 +127,36 @@ CREATE TABLE IF NOT EXISTS automation_runs (
 );
 CREATE INDEX IF NOT EXISTS automation_runs_auto ON automation_runs(automation_id, created);
 CREATE INDEX IF NOT EXISTS automation_runs_status ON automation_runs(status);
+CREATE TABLE IF NOT EXISTS example_packs (
+    id          TEXT NOT NULL,
+    version     TEXT NOT NULL,
+    status      TEXT NOT NULL,            -- uploading | ready | invalid
+    official    INTEGER NOT NULL DEFAULT 0,  -- manifest hash matches the catalog shipped with the platform
+    manifest    TEXT NOT NULL,            -- validated manifest JSON
+    files       TEXT NOT NULL DEFAULT '{}',  -- section file -> "ok"
+    error       TEXT,
+    created_at  TEXT NOT NULL,
+    created_by  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (id, version)
+);
+CREATE TABLE IF NOT EXISTS example_installs (
+    id          TEXT PRIMARY KEY,
+    pack        TEXT NOT NULL,
+    version     TEXT NOT NULL,
+    dimension   TEXT NOT NULL,
+    anchor      TEXT NOT NULL,            -- [x, y, z] world position of the pack anchor
+    bbox        TEXT NOT NULL,            -- {"from": [x,y,z], "to": [x,y,z]}
+    status      TEXT NOT NULL,            -- see examples.INSTALL_STATES
+    job         TEXT,                     -- place | rollback | forget while the mod works on it
+    progress    TEXT NOT NULL DEFAULT '{}',
+    snapshots   TEXT NOT NULL DEFAULT 'none',  -- none | present | deleted
+    error       TEXT,
+    created_at  TEXT NOT NULL,
+    created_by  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    finished_at TEXT
+);
 """
 
 
@@ -149,6 +179,44 @@ def utc_day_start() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT00:00:00.000Z")
 
 
+class _Rows:
+    """A fully read statement result, so no cursor is used after the lock is released."""
+
+    def __init__(self, cur: sqlite3.Cursor):
+        self.rows = cur.fetchall() if cur.description else []
+        self.rowcount, self.lastrowid = cur.rowcount, cur.lastrowid
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return list(self.rows)
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class _SerializedDB:
+    """The gateway's threads (HTTP requests, automations, sweeper) share one SQLite connection. Python's sqlite3
+    objects are not safe for concurrent use, so every statement runs under one lock and its rows are read inside it."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self._lock = threading.RLock()
+
+    def execute(self, sql: str, params=()) -> _Rows:
+        with self._lock:
+            return _Rows(self._conn.execute(sql, params))
+
+    def executescript(self, sql: str) -> None:
+        with self._lock:
+            self._conn.executescript(sql)
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+
 class Store:
     def __init__(self, data_dir: Path, audit_log_text: bool = False):
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -156,8 +224,9 @@ class Store:
         self.audit_dir.mkdir(exist_ok=True)
         self.audit_log_text = audit_log_text
         self._lock = threading.Lock()
-        self.db = sqlite3.connect(str(data_dir / "gateway.db"), check_same_thread=False, isolation_level=None)
-        self.db.row_factory = sqlite3.Row
+        conn = sqlite3.connect(str(data_dir / "gateway.db"), check_same_thread=False, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        self.db = _SerializedDB(conn)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.executescript(SCHEMA)
@@ -690,3 +759,55 @@ class Store:
         with self._lock:
             return self.db.execute("SELECT COUNT(*) FROM requests WHERE automation_run IS NOT NULL AND created_at >= ?",
                                    (since,)).fetchone()[0]
+
+    # ---------- example packs and installs (ADR-0012) ----------
+    def example_pack(self, pid: str, version: str) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM example_packs WHERE id=? AND version=?", (pid, version)).fetchone()
+
+    def example_packs(self, pid: str | None = None) -> list[sqlite3.Row]:
+        if pid:
+            return self.db.execute("SELECT * FROM example_packs WHERE id=? ORDER BY created_at DESC", (pid,)).fetchall()
+        return self.db.execute("SELECT * FROM example_packs ORDER BY id, created_at DESC").fetchall()
+
+    def example_pack_put(self, pid: str, version: str, by: str, **fields) -> None:
+        now = utcnow()
+        with self._lock:
+            if self.example_pack(pid, version) is None:
+                self.db.execute("INSERT INTO example_packs (id, version, status, manifest, created_at, created_by, "
+                                "updated_at) VALUES (?,?,?,?,?,?,?)", (pid, version, "uploading", "{}", now, by, now))
+            if fields:
+                cols = ", ".join(f"{k}=?" for k in fields)
+                self.db.execute(f"UPDATE example_packs SET {cols}, updated_at=? WHERE id=? AND version=?",
+                                (*fields.values(), now, pid, version))
+
+    def example_pack_delete(self, pid: str, version: str) -> None:
+        self.db.execute("DELETE FROM example_packs WHERE id=? AND version=?", (pid, version))
+
+    def example_install(self, iid: str) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM example_installs WHERE id=?", (iid,)).fetchone()
+
+    def example_installs(self, statuses: tuple = (), pack: str | None = None) -> list[sqlite3.Row]:
+        q, args = "SELECT * FROM example_installs WHERE 1=1", []
+        if statuses:
+            q += f" AND status IN ({','.join('?' * len(statuses))})"
+            args += list(statuses)
+        if pack:
+            q += " AND pack=?"
+            args.append(pack)
+        return self.db.execute(q + " ORDER BY created_at DESC", args).fetchall()
+
+    def example_install_create(self, iid: str, pack: str, version: str, dimension: str, anchor: list, bbox: dict,
+                               by: str) -> None:
+        now = utcnow()
+        self.db.execute("INSERT INTO example_installs (id, pack, version, dimension, anchor, bbox, status, created_at, "
+                        "created_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (iid, pack, version, dimension, json.dumps(anchor), json.dumps(bbox), "queued", now, by, now))
+
+    def example_install_update(self, iid: str, from_status: tuple | None = None, **fields) -> bool:
+        cols = ", ".join(f"{k}=?" for k in fields)
+        q, args = f"UPDATE example_installs SET {cols}, updated_at=? WHERE id=?", [*fields.values(), utcnow(), iid]
+        if from_status:
+            q += f" AND status IN ({','.join('?' * len(from_status))})"
+            args += list(from_status)
+        with self._lock:
+            return self.db.execute(q, args).rowcount == 1

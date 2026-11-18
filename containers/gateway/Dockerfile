@@ -5,6 +5,8 @@ RUN useradd --uid 10001 --user-group --no-create-home --shell /usr/sbin/nologin 
  && mkdir -p /data && chown mcai:mcai /data
 COPY --chown=root:root src/mcai /app/mcai
 COPY --chown=root:root automation-examples /app/automation-examples
+COPY --chown=root:root examples/catalog.json /app/examples/catalog.json
+COPY --chown=root:root examples/atlantis/automations /app/examples/atlantis/automations
 USER mcai
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \

@@ -1,0 +1,20 @@
+# /ai trigger atlantis: the player gets the places worth seeing with their coordinates in this world.
+id = "atlantis-tour"
+name = "Atlantis tour"
+description = "Players type /ai trigger atlantis to get the city's sights with coordinates."
+enabled = false
+
+[trigger]
+event = "player.trigger"
+name = "atlantis"
+
+[[actions]]
+type = "message"
+text = "Atlantis tour, {player}: start at the central tower, then walk north along the grand avenue."
+
+[[actions]]
+type = "example_tour"
+example = "atlantis-lite"
+
+[limits]
+cooldown_s = 120

@@ -37,6 +37,12 @@ def test_hardening_on_every_service(config):
         assert svc.get("mem_limit"), name
 
 
+def test_platform_containers_reap_child_processes(config):
+    """Without an init as PID 1, exited sessions/tools become zombies and exhaust pids_limit (ssh-gateway: 64)."""
+    for name in ("gateway", "ai-worker", "ssh-gateway"):
+        assert config["services"][name].get("init") is True, name
+
+
 def test_no_docker_socket_mounted(config):
     for name, svc in services(config):
         for v in svc.get("volumes", []):

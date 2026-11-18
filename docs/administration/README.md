@@ -51,6 +51,8 @@ router: use a VPN to administer from outside.
 | Backups | `mcai backups list` | auditor, operator+ |
 | Automations: list, details, run history | `mcai automations list`, `show <id>`, `runs [id]` (alias `mcai auto`) | auditor, operator+ |
 | Automations: import, enable, run, ask the AI | `mcai automations import <file>`, `enable <id>`, `run <id>`, `propose <text>` | admin+ (privileged ones: owner approves) |
+| Example builds (Atlantis): catalog, packs, installs | `mcai examples list`, `info <pack>`, `installs`, `status <install>` | auditor, operator+ |
+| Example builds: download, install, repair, roll back | `mcai examples download <pack>`, `install <pack> --at X Y Z`, `repair`/`rollback <install>` | admin+ |
 
 Add `--json` before the command for machine-readable output, for example `mcai --json status`.
 
@@ -340,7 +342,7 @@ ai_max_tokens_per_day = 50000
 | Event | Extra trigger keys | Placeholders |
 | --- | --- | --- |
 | `player.join`, `player.first_join`, `player.leave` | | `{player}` |
-| `player.enter_area`, `player.leave_area` | `area = {name, dimension, from = [x,y,z], to = [x,y,z]}` (max 512 per side) | `{player}`, `{area}` |
+| `player.enter_area`, `player.leave_area` | `area = {name, dimension, from = [x,y,z], to = [x,y,z]}` (max 512 per side), or `area = {name, example = "atlantis-lite"}`: the area of that example's latest install | `{player}`, `{area}` |
 | `player.advancement` | `advancement = "minecraft:story/*"` (glob on the id; default all) | `{player}`, `{advancement}` |
 | `player.trigger` | `name = "tour"`: players type `/ai trigger tour` | `{player}`, `{trigger}` |
 | `build.completed`, `build.failed`, `build.undone` | | `{player}`, `{title}`, `{request}`, `{blocks}` |
@@ -367,6 +369,8 @@ changes reach the mod within 30 s of enabling an automation.
 | `set_role` (`role` = player or builder) | give the triggering player that role; never lowers a role | roles.assign, **privileged** |
 | `ai_message` (`prompt`, `to` = broadcast, player or staff, `max_usd`) | asks the AI (text only) and sends the answer | ai.configure |
 | `ai_build` (`prompt`, `dimension`, `at = [x,y,z]`) | asks the AI for a build proposal; staff approve it as usual | ai.build, **privileged** |
+| `example_tour` (`example`) | tells the triggering player the example's places of interest with their coordinates | players.moderate |
+| `example_restore` (`example`) | repairs the example's latest install (see [Example builds](#example-builds-atlantis)) | examples.install, **privileged** |
 
 ### Who may do what
 
@@ -374,7 +378,7 @@ changes reach the mod within 30 s of enabling an automation.
 - **Change** (import, install, enable, disable, run, delete, propose): admin and owner. You must hold every
   permission the automation's actions need, and you become its **owner**. If the owner later loses one of those
   permissions or the account is disabled, the next run is denied and the automation is **suspended**.
-- **Privileged** automations (`set_role`, `ai_build`) created by an admin wait as `pending_approval` until the
+- **Privileged** automations (`set_role`, `ai_build`, `example_restore`) created by an admin wait as `pending_approval` until the
   owner runs `mcai automations approve <id>`. AI proposals always wait for approval; privileged ones need the owner.
 
 ### Safeguards
@@ -394,3 +398,72 @@ changes reach the mod within 30 s of enabling an automation.
 Backups are not an automation action: the backup service makes them on its own schedule (`BACKUP_INTERVAL`),
 because starting one needs host privileges that nothing in the platform has. The `autosave` example flushes the
 world between backups.
+
+## Example builds (Atlantis)
+
+The platform can install ready-made builds into your world. The first is **Atlantis**, an original underwater
+city under a glass dome, made by the project's own generator
+([examples/atlantis](../../examples/atlantis/README.md)). It comes in two sizes:
+
+| Pack | What | Size | Install time |
+| --- | --- | --- | --- |
+| `atlantis-lite` | a 96-block-wide cutaway: the central tower, the Fountain Plaza district, a pier, the dome wall and the sea | 96 x 127 x 768, 9.4 million blocks, 0.2 MB | about a minute |
+| `atlantis-full` | the whole city: ten districts, six piers, a 1,200-block dome and the sea floor | 1,600 x 127 x 1,600, 255 million blocks, 4.7 MB | 30-80 minutes |
+
+### Install
+
+```bash
+mcai examples list                                   # what the server knows and has
+mcai examples download atlantis-lite                 # on your computer: download, check, send to the server
+mcai examples info atlantis-lite                     # size, anchor, places of interest
+mcai examples install atlantis-lite --at 2000 -56 2000          # preview: area, blocks, time
+mcai examples install atlantis-lite --at 2000 -56 2000 --yes    # place it
+mcai examples status <install>                       # progress; when done: places of interest with coordinates
+```
+
+- **Where.** `--at X Y Z` is where the pack's *anchor* goes: the city centre at floor level. People walk 5 blocks
+  higher. With Y = -56 (the recommended value) Atlantis Lite fills y -64 to 62, so its glass roof sits at sea level
+  in an ocean. Lite is sealed with glass on all sides, so it also works on land. Full needs a deep ocean of about
+  1,600 x 1,600 blocks; make a backup before installing it.
+- **Checks before anything changes.** The pack must fit in the world's height, may not overlap a protected area
+  (`protected-areas.json`, as for AI builds) or another install, and may not exceed `EXAMPLES_MAX_INSTALL_BLOCKS`.
+- **What happens.** The server works through the pack chunk by chunk. Before it changes a chunk, it saves what
+  is there (an undo snapshot in `world/generated/mcai/structures/examples/`). It then sets only the blocks that
+  differ, `EXAMPLES_BLOCKS_PER_TICK` (4000) per tick. Lower that value if the server lags while placing.
+- **One job at a time.** A second install, repair or rollback waits until the first is done; `mcai examples
+  cancel <install>` stops one (it stays partly placed: repair or roll it back afterwards).
+
+### Repair, roll back, forget
+
+```bash
+mcai examples repair <install>          # places it again: only blocks that were broken or changed
+mcai examples rollback <install> --yes  # restores the area as it was before (including anything built there since)
+mcai examples forget <install> --yes    # deletes the undo snapshots to free disk space: no rollback afterwards
+```
+
+If the server restarts while placing, the install is marked `interrupted`. Run `repair` to finish it, or
+`rollback` to undo it. Both keep working after a restart because the snapshots are files in the world.
+
+### Automations for Atlantis
+
+`mcai automations examples` also lists three Atlantis automations (install them after the pack):
+
+- `atlantis-arrival` greets players who walk into the installed city. Its area follows the install, so there are no
+  coordinates to edit.
+- `atlantis-tour`: players type `/ai trigger atlantis` and get the sights with coordinates.
+- `atlantis-restore` repairs the city every Monday at 05:00. It changes the world, so the owner approves it.
+
+### Trust and safety
+
+- **Where packs come from.** `mcai examples download` runs on your computer, because the server has no internet
+  access. It fetches only from this project's GitHub release downloads, over https. It checks the manifest against
+  the SHA-256 in the platform's catalog (`examples/catalog.json`) and every section against the manifest, then
+  sends the files over SSH (`examples.manage`, admin+).
+- **What the server accepts.** The gateway checks every file again. It only accepts block data: no commands,
+  scripts, entities or block-entity data (chest contents, signs, command blocks). Blocks such as command blocks,
+  structure blocks, spawners, TNT, lava and bedrock are refused, and size, nesting and decompression are capped.
+  The mod checks each block with the game's own parser (NBT disabled) before placing.
+- **Your own builds.** `mcai examples download <pack> --from <folder>` sends a pack you built yourself
+  (`scripts/build-examples.sh`). It goes through the same checks and is labelled *unofficial*.
+- Every upload, refusal, install, repair, rollback and snapshot deletion is in the audit log (`examples.*`).
+

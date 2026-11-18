@@ -112,7 +112,8 @@ def build_parser() -> Parser:
 
 GROUP_HELP = {"players": "players, roles and sessions", "whitelist": "server whitelist", "server": "save, restart, console",
               "ai": "AI requests, approvals, limits", "audit": "audit history", "accounts": "management accounts and SSH keys",
-              "backups": "world backups", "automations": "event and scheduled automations (alias: auto)"}
+              "backups": "world backups", "automations": "event and scheduled automations (alias: auto)",
+              "examples": "example builds such as Atlantis: download, install, repair, roll back"}
 GROUP_ALIASES = {"automations": ["auto"]}
 
 
@@ -876,21 +877,226 @@ def c_auto_propose(gw, actor, a, ctx):
 
 
 # ---------------------------------------------------------------- entry point
+# ---------------------------------------------------------------- example packs (ADR-0012)
+def _install_rows(rows) -> str:
+    out = []
+    for r in rows:
+        prog = json.loads(r["progress"] or "{}")
+        pct = f"{100 * prog['done'] // prog['total']}%" if prog.get("total") else ""
+        a = json.loads(r["anchor"])
+        out.append([r["id"], r["pack"], r["version"], r["status"] + (f" {pct}" if r["status"] == "placing" else ""),
+                    f"{a[0]} {a[1]} {a[2]}", r["dimension"].removeprefix("minecraft:"), r["snapshots"],
+                    r["created_at"][:16]])
+    return table(out, ["install", "pack", "version", "status", "anchor", "dim", "undo", "created"])
+
+
+@command("examples list", "examples.read", "the catalog, packs on the server and installs")
+def c_ex_list(gw, actor, a, ctx):
+    ex = gw.examples
+    cat = ex.catalog()
+    have = {(r["id"], r["version"]): r for r in gw.store.example_packs()}
+    rows = []
+    for e in cat:
+        r = have.get((e["id"], e["version"]))
+        state = (r["status"] + ("" if r["official"] else " (unofficial)")) if r else "not downloaded"
+        mb = f"{e['total_bytes'] / 1e6:.1f} MB" if e.get("total_bytes") else ""
+        rows.append([e["id"], e["version"], state, mb, e["title"]])
+    for (pid, ver), r in have.items():
+        if not any(e["id"] == pid and e["version"] == ver for e in cat):
+            m = json.loads(r["manifest"] or "{}")
+            rows.append([pid, ver, r["status"] + ("" if r["official"] else " (unofficial)"),
+                         f"{m.get('total_bytes', 0) / 1e6:.1f} MB", m.get("title", "")])
+    text = table(rows, ["pack", "version", "on server", "size", "title"]) if rows else "No example packs."
+    inst = gw.store.example_installs()
+    if inst:
+        text += "\n\n" + _install_rows(inst[:10])
+    text += ("\n\nDownload with 'mcai examples download <pack>', then 'mcai examples install <pack> --at X Y Z'."
+             if cat else "")
+    return Result(text, {"catalog": cat, "packs": [{"id": k[0], "version": k[1], "status": r["status"],
+                                                    "official": bool(r["official"])} for k, r in have.items()],
+                         "installs": [dict(r) for r in inst]})
+
+
+@command("examples catalog", "examples.read", "download locations and checksums (used by 'mcai examples download')")
+def c_ex_catalog(gw, actor, a, ctx):
+    cat = gw.examples.catalog()
+    lines = [f"{e['id']} {e['version']}: {e['manifest_url']}\n  manifest sha256 {e['manifest_sha256']}" for e in cat]
+    return Result("\n".join(lines) or "The catalog is empty.", {"catalog": cat})
+
+
+@command("examples info", "examples.read", "a pack: size, sections, places of interest, installs", arg("pack"),
+         arg("--version"))
+def c_ex_info(gw, actor, a, ctx):
+    row = gw.examples.pack(a.pack, a.version)
+    m = json.loads(row["manifest"])
+    files = json.loads(row["files"])
+    x, y, z = m["size"]
+    lines = [f"{m['title']} {m['version']} ({row['status']}, {'official' if row['official'] else 'unofficial'})",
+             m["description"],
+             f"Size {x} x {y} x {z} blocks, {m['total_blocks']:,} blocks in {len(m['sections'])} section(s), "
+             f"{m['total_bytes'] / 1e6:.1f} MB; uploaded {len(files)}/{len(m['sections'])}",
+             f"Anchor: {m['anchor']}; the pack spans {m['origin']} .. "
+             f"{[m['origin'][i] + m['size'][i] - 1 for i in range(3)]} around it",
+             f"Minecraft {m['minecraft']}, license {m['license']}"]
+    rec = m.get("recommended") or {}
+    if rec:
+        lines.append(f"Recommended: anchor y {rec.get('floor_y', '?')}. {rec.get('note', '')}".rstrip())
+    for p in m.get("points_of_interest", []):
+        lines.append(f"  - {p['name']}: {p['at']} from the anchor")
+    if row["error"]:
+        lines.append(f"Problem: {row['error']}")
+    inst = gw.store.example_installs(pack=a.pack)
+    if inst:
+        lines += ["", _install_rows(inst)]
+    return Result("\n".join(lines), {"pack": dict(row) | {"manifest": m}, "installs": [dict(r) for r in inst]})
+
+
+@command("examples upload", "examples.manage", "store one pack file (sent by 'mcai examples download')",
+         arg("pack"), arg("version"), arg("file"), arg("--stdin", action="store_true", help=argparse.SUPPRESS),
+         audited=True)
+def c_ex_upload(gw, actor, a, ctx):
+    if not ctx.get("input"):
+        raise MgmtError("usage", "Use 'mcai examples download <pack>' (it sends the files for you).")
+    return Result(gw.examples.upload(actor, a.pack, a.version, a.file, ctx["input"]))
+
+
+@command("examples validate", "examples.manage", "check a pack's files on the server again", arg("pack"),
+         arg("--version"), audited=True)
+def c_ex_validate(gw, actor, a, ctx):
+    from .examples import PackError, validate_manifest, validate_section
+    row = gw.examples.pack(a.pack, a.version)
+    d = gw.examples._dir(row["id"], row["version"])
+    try:
+        m = validate_manifest((d / "manifest.json").read_bytes())
+        for s in m["sections"]:
+            validate_section((d / s["file"]).read_bytes(), s, m)
+    except FileNotFoundError as e:
+        raise MgmtError("invalid", f"Missing file {Path(e.filename).name}; download the pack again.") from None
+    except PackError as e:
+        gw.store.example_pack_put(row["id"], row["version"], actor.label, status="invalid", error=str(e)[:300])
+        gw.store.audit("examples.rejected", pack=row["id"], version=row["version"], reason=str(e), by=actor.label)
+        raise MgmtError("invalid", f"Invalid: {e}") from None
+    gw.store.example_pack_put(row["id"], row["version"], actor.label, status="ready", error=None,
+                              files=json.dumps({s["file"]: "ok" for s in m["sections"]}))
+    return Result(f"{m['title']} {m['version']}: manifest and {len(m['sections'])} section(s) are valid.")
+
+
+@command("examples delete", "examples.manage", "delete a pack from the server (not from the world)", arg("pack"),
+         arg("version"), arg("--yes", action="store_true", help="required: confirms"), audited=True)
+def c_ex_delete(gw, actor, a, ctx):
+    if not a.yes:
+        raise MgmtError("confirm", f"Re-run with --yes to delete {a.pack} {a.version} from the server.")
+    return Result(gw.examples.delete(actor, a.pack, a.version))
+
+
+@command("examples install", "examples.install", "place a pack in the world (a preview first, then --yes)",
+         arg("pack"), arg("--at", nargs=3, type=int, metavar=("X", "Y", "Z"), required=True,
+                          help="where the pack's anchor goes (see 'examples info')"),
+         arg("--dimension", default="minecraft:overworld"), arg("--version"),
+         arg("--yes", action="store_true", help="start placing (without it you only get the preview)"),
+         audited=True)
+def c_ex_install(gw, actor, a, ctx):
+    p = gw.examples.preview(a.pack, a.version, a.dimension, list(a.at))
+    f, t = p["bbox"]["from"], p["bbox"]["to"]
+    lines = [f"{p['title']} {p['version']}{'' if p['official'] else ' (unofficial)'} at {a.at[0]} {a.at[1]} {a.at[2]} "
+             f"in {a.dimension}",
+             f"Area: {f[0]} {f[1]} {f[2]} .. {t[0]} {t[1]} {t[2]} ({p['chunks']} chunks), {p['blocks']:,} blocks",
+             f"Takes about {max(1, p['estimate_s'] // 60)} minute(s). Everything there now is saved first, so "
+             f"'mcai examples rollback' can restore it.",
+             f"Walk in at {p['walk_at'][0]} {p['walk_at'][1]} {p['walk_at'][2]}."]
+    if not a.yes:
+        return Result("\n".join(lines + ["Re-run with --yes to place it."]), p, True, "confirm")
+    r = gw.examples.install(actor, a.pack, a.version, a.dimension, list(a.at))
+    return Result("\n".join(lines + [f"Started install {r['install']}. Follow it with 'mcai examples status "
+                                     f"{r['install']}'."]), r | p)
+
+
+@command("examples installs", "examples.read", "installed examples and running jobs")
+def c_ex_installs(gw, actor, a, ctx):
+    rows = gw.store.example_installs()
+    return Result(_install_rows(rows) if rows else "Nothing installed.", [dict(r) for r in rows])
+
+
+@command("examples status", "examples.read", "one install: progress, area, places of interest", arg("install"))
+def c_ex_status(gw, actor, a, ctx):
+    r = gw.examples.get(a.install)
+    prog = json.loads(r["progress"] or "{}")
+    b = json.loads(r["bbox"])
+    lines = [f"Install {r['id']}: {r['pack']} {r['version']}, {r['status']}"
+             + (f" ({r['job']})" if r["job"] else ""),
+             f"Area {b['from']} .. {b['to']} in {r['dimension']}; undo snapshots: {r['snapshots']}",
+             f"By {r['created_by']} at {r['created_at'][:19]}" + (f", finished {r['finished_at'][:19]}"
+                                                                  if r["finished_at"] else "")]
+    if prog.get("total"):
+        lines.append(f"Progress: {prog.get('done', 0):,} of {prog['total']:,} blocks checked "
+                     f"({100 * prog.get('done', 0) // prog['total']}%), {prog.get('changed', 0):,} changed")
+    if r["error"]:
+        lines.append(f"Error: {r['error']}")
+    p = gw.store.example_pack(r["pack"], r["version"])
+    if p is not None:
+        anchor = json.loads(r["anchor"])
+        for poi in json.loads(p["manifest"]).get("points_of_interest", []):
+            w = [anchor[i] + poi["at"][i] for i in range(3)]
+            lines.append(f"  - {poi['name']}: {w[0]} {w[1]} {w[2]}")
+    return Result("\n".join(lines), dict(r) | {"progress": prog})
+
+
+@command("examples repair", "examples.install", "place an install again: only blocks that differ change",
+         arg("install"), audited=True)
+def c_ex_repair(gw, actor, a, ctx):
+    return Result(gw.examples.repair(actor, a.install))
+
+
+@command("examples rollback", "examples.install", "restore the area as it was before the install",
+         arg("install"), arg("--yes", action="store_true", help="required: confirms"), audited=True)
+def c_ex_rollback(gw, actor, a, ctx):
+    if not a.yes:
+        r = gw.examples.get(a.install)
+        b = json.loads(r["bbox"])
+        raise MgmtError("confirm", f"This restores {b['from']} .. {b['to']} to how it was before install {r['id']}, "
+                                   f"including anything built there since. Re-run with --yes.")
+    return Result(gw.examples.rollback(actor, a.install))
+
+
+@command("examples cancel", "examples.install", "stop a running install", arg("install"), audited=True)
+def c_ex_cancel(gw, actor, a, ctx):
+    return Result(gw.examples.cancel(actor, a.install))
+
+
+@command("examples forget", "examples.install", "delete an install's undo snapshots (no rollback afterwards)",
+         arg("install"), arg("--yes", action="store_true", help="required: confirms"), audited=True)
+def c_ex_forget(gw, actor, a, ctx):
+    if not a.yes:
+        raise MgmtError("confirm", "Without its snapshots the install can't be rolled back. Re-run with --yes.")
+    return Result(gw.examples.forget(actor, a.install))
+
+
+@command("examples download", "examples.manage", "download a pack and send it to the server (mcai client)",
+         arg("pack"), arg("--from", dest="source"), arg("--version"))
+def c_ex_download(gw, actor, a, ctx):
+    raise MgmtError("usage", "Downloads run in the mcai client on your computer (the server has no internet "
+                             "access): 'mcai examples download " + a.pack + "'.")
+
+
 def _params(ns) -> dict:
     out = {}
     for k, v in vars(ns).items():
         if k.startswith("_") or k in ("cmd", "sub", "key"):
             continue
-        out[k] = (" ".join(v) if isinstance(v, list) else v)
+        out[k] = (" ".join(map(str, v)) if isinstance(v, list) else v)
         if isinstance(out[k], str):
             out[k] = out[k][:200]
     return out
 
 
-def run(gw, body: dict) -> dict:
+def run(gw, body: dict, upload: bool = False) -> dict:
+    from .examples import ExampleError
     from .gateway import Rejected
+    cap = gw.s.examples_max_file_mb * 1400 * 1024 if upload else 65536
     ctx = {"source_ip": str(body.get("source_ip", ""))[:64], "session": str(body.get("session", ""))[:40],
-           "fingerprint": "", "input": str(body.get("input", ""))[:65536]}
+           "fingerprint": "", "input": str(body.get("input", ""))[:cap]}
+    if upload and list(body.get("argv") or [])[:2] != ["examples", "upload"]:
+        return {"ok": False, "code": "usage", "text": "Only 'examples upload' uses the upload channel."}
     try:
         key = parse_public_key(str(body.get("key", "")))
     except KeyError_:
@@ -936,7 +1142,7 @@ def run(gw, body: dict) -> dict:
         res = Result(e.message, None, False, e.code)
     except Rejected as e:
         res = Result(e.message, None, False, e.code)
-    except AutomationError as e:
+    except (AutomationError, ExampleError) as e:
         res = Result(e.message, None, False, e.code)
     except Exception:
         import logging

@@ -1,13 +1,13 @@
 # Architecture overview
 
-> Implemented through Phase 5 (0.5.0).
+> Implemented through Phase 6 (0.6.0).
 
 ## Components
 
 | Service | Responsibility | Trust level | Talks to |
 | --- | --- | --- | --- |
-| `minecraft` | itzg/minecraft-server (Fabric) + the `mcai` server mod: `/ai` commands, join/leave + health reports, previews, block placement, undo snapshots, game events for automations (areas, advancements, `/ai trigger`, world time). **Implemented** | Untrusted input (players) | gateway (token-authenticated API) |
-| `gateway` | Identities (player UUIDs, accounts), roles, request routing, plan validation, approvals, rate and budget limits, management API, automation engine, audit log, SQLite state. **The only component that decides.** **Implemented** | Trusted core | minecraft (mod API; RCON on the internal network for management commands), ai-worker, ssh-gateway |
+| `minecraft` | itzg/minecraft-server (Fabric) + the `mcai` server mod: `/ai` commands, join/leave + health reports, previews, block placement, undo snapshots, example packs (verified `.schem` sections placed chunk by chunk), game events for automations (areas, advancements, `/ai trigger`, world time). **Implemented** | Untrusted input (players) | gateway (token-authenticated API) |
+| `gateway` | Identities (player UUIDs, accounts), roles, request routing, plan validation, approvals, rate and budget limits, management API, automation engine, example pack store and installer, audit log, SQLite state. **The only component that decides.** **Implemented** | Trusted core | minecraft (mod API; RCON on the internal network for management commands), ai-worker, ssh-gateway |
 | `ai-worker` | Runs Claude Code per job with no tools (questions) or two MCP proposal tools (builds). Holds the AI credential. **Implemented** | Semi-trusted (model output is untrusted) | gateway; internet egress to the AI provider |
 | `ssh-gateway` | OpenSSH (unprivileged, keys only), `ForceCommand` → dispatcher; no shell, PTY, forwarding or files. **Implemented** | Edge | gateway management API |
 | `backup` | itzg/mc-backup: scheduled world backups. **Implemented** | Data | minecraft (RCON, read-only data) |
@@ -30,6 +30,23 @@ flowchart LR
   EX -->|ai_message, ai_build| Q[AI queue → worker]
   EX --> AUD[audit log]
 ```
+
+## Example packs
+
+```mermaid
+flowchart LR
+  REL[GitHub release<br/>manifest + .schem sections] -->|https, allowlisted,<br/>hash = catalog| CLI[mcai client<br/>admin's computer]
+  CLI -->|SSH, examples upload| SSH[ssh-gateway]
+  SSH --> GW[gateway<br/>manifest schema, SHA-256,<br/>bounded .schem parse, deny-list]
+  GW -->|install: height, protected areas,<br/>overlap, size| EV[event to the mod]
+  EV --> MOD[mod: fetch section, SHA-256,<br/>block parser + deny-list]
+  MOD --> SNAP[(undo snapshots<br/>per chunk piece)]
+  MOD -->|only differing cells,<br/>N blocks per tick| WORLD[(world)]
+  SNAP -->|rollback| WORLD
+```
+
+The gateway has no internet access: the client downloads, and the gateway re-checks everything it receives
+(ADR-0012).
 
 ## High-level flow
 

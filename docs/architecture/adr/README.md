@@ -16,3 +16,4 @@ Each significant decision is recorded as `NNNN-title.md`. The template: **Status
 | [0009](0009-ai-builds.md) | AI builds: structured plans, approval, mod-side execution, structure snapshots | Accepted |
 | [0010](0010-management-rbac-ssh.md) | Management over SSH (forced command), roles by UUID/account, hash-chained audit | Accepted |
 | [0011](0011-automation-engine.md) | Automation engine in the gateway: declarative definitions, idempotent runs, guards, approval | Accepted |
+| [0012](0012-example-packs.md) | Example packs (Atlantis): `.schem` sections + manifest, pinned hashes, client-side download, mod placement with undo | Accepted |

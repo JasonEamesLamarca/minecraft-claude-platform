@@ -4,3 +4,5 @@ src/mcai/**/__pycache__
 !containers/management/sshd_config
 !containers/management/mcai-server
 !automation-examples/*.toml
+!examples/catalog.json
+!examples/atlantis/automations/*.toml

@@ -134,6 +134,7 @@ services:
 
   gateway:
     <<: *hardening
+    init: true                     # a real PID 1 that reaps exited child processes
     build:
       context: .
       dockerfile: containers/gateway/Dockerfile
@@ -178,6 +179,10 @@ services:
       AUTOMATION_TIMEZONE: "${AUTOMATION_TIMEZONE:-}"
       AUTOMATION_MAX_RUNS_PER_MINUTE: "${AUTOMATION_MAX_RUNS_PER_MINUTE:-30}"
       AUTOMATION_AI_CALLS_PER_HOUR: "${AUTOMATION_AI_CALLS_PER_HOUR:-10}"
+      # Example packs (Atlantis): placing speed and size limits.
+      EXAMPLES_BLOCKS_PER_TICK: "${EXAMPLES_BLOCKS_PER_TICK:-4000}"
+      EXAMPLES_MAX_FILE_MB: "${EXAMPLES_MAX_FILE_MB:-8}"
+      EXAMPLES_MAX_INSTALL_BLOCKS: "${EXAMPLES_MAX_INSTALL_BLOCKS:-300000000}"
     secrets:
       - gateway_mod_token
       - worker_token
@@ -197,6 +202,7 @@ services:
   # Holds the AI credential; no world data, no Docker socket, no published ports.
   ai-worker:
     <<: *hardening
+    init: true                     # a real PID 1 that reaps exited child processes
     build:
       context: .
       dockerfile: containers/claude/Dockerfile
@@ -239,6 +245,7 @@ services:
   # management API; holds no Docker socket, world data or AI credential.
   ssh-gateway:
     <<: *hardening
+    init: true                     # a real PID 1 that reaps exited child processes
     build:
       context: .
       dockerfile: containers/management/Dockerfile

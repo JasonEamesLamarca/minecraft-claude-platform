@@ -85,9 +85,25 @@ evidence named. Unverified items say so.
 | `mcai automations …` (15 commands), file import over stdin, TUI panel (F7) | ✅ | `test_management_permissions` and other command tests; `test_cli.py`; `test_tui.py`; operational test |
 | 11 example automations | ✅ | `automation-examples/`; validated in `test_automation_defs.py` |
 | Operational: import over SSH, forbidden action refused, run reaches the game, night event, mixin loads | ✅ | `tests/operational/first_start.sh` (laptop, 17 Nov 2026) |
-| In game with a real client: area greeting, `/ai trigger tour`, advancement event, welcome on first join | ⏳ | **Needs maintainer** |
-| Real Claude: `mcai automations propose` with the configured credential | ⏳ | Mock verified; real call when the maintainer runs it (costs a few cents) |
-## Phase 6 — Atlantis (original; Lite + Full; examples CLI) ⏳
+| In game with a real client: area greeting, `/ai trigger tour`, advancement event, welcome on first join | ✅ | Maintainer, 17 Nov 2026 |
+| Real Claude: `mcai automations propose` with the configured credential | ✅ | Maintainer, 17 Nov 2026 (proposal `evening-logoff-reminder`) |
+## Phase 6 — Atlantis (original; Lite + Full; examples CLI) ✅ (in-game check pending)
+
+| Task | Status | Verified by |
+| --- | --- | --- |
+| Generator ported (stdlib Python, 25 test files) to `examples/atlantis/generator`, private profile/deploy/reference tools left out | ✅ | `tests/run_all.py` (25/25) |
+| IP clean-up (D2): ring gate, dialling device, chevrons, hover-craft models, power crystals, control chair, franchise names replaced by original designs | ✅ | term search clean, `check-private.sh`, ADR-0005 note |
+| Packs: deterministic Sponge v3 `.schem` sections + manifest (SHA-256, offsets, places of interest); Lite (sealed cutaway, 6 sections, 0.2 MB) and Full (90 sections, 4.7 MB) | ✅ | `test_pack.py`; `scripts/build-examples.sh` (identical hashes on rebuild with the same zlib) |
+| Catalog with pinned manifest hashes and compression-independent content digests; `build-examples.sh --check` for CI | ✅ | `test_shipped_catalog_is_valid`; same digest with zlib 1.2.13 (Python 3.12 image) and 1.3.1 |
+| Gateway: pack store, strict manifest + bounded `.schem` validation, deny-list, installs with site checks, repair, rollback, cancel, forget, interruption handling | ✅ | `test_examples.py` (88), `test_examples_flow.py` (14) |
+| `mcai examples …` (14 commands); client-side download with URL allowlist, pinned hashes, `--from` local builds | ✅ | `test_cli.py`, `test_examples_flow.py` |
+| Mod 0.6.0: `ExamplePlacer` (hash + NBT limits + block parser + deny-list, snapshots per chunk piece, diff placement, budget per tick, rollback) | ✅ | `ExamplePlacerTest`; operational test |
+| Automations: example areas, `example_tour`, `example_restore` (privileged); 3 Atlantis automations | ✅ | `test_example_area_follows_the_install`, `test_example_tour_and_restore` |
+| Malicious-manifest / hostile-file tests | ✅ | `test_examples.py` |
+| Operational: Lite downloaded via the CLI, installed on a fresh test server, blocks verified over RCON, rolled back | ✅ | `tests/operational/first_start.sh` (laptop, 18 Nov 2026) |
+| Renders of Lite (labelled renders) | ✅ | `examples/atlantis/screenshots/` |
+| GitHub release `examples-1.0.0` with the pack files | ⏳ | Needs the owner's go-ahead (release assets of the private repo) |
+| In game with a real client: walk through Lite, tour automation, screenshots | ⏳ | **Needs maintainer** |
 ## Phase 7 — Hardening + full CI (tests, buildx multi-arch, Trivy, SBOM, release) ⏳
 ## Phase 8 — Docs, diagrams, genuine screenshots ⏳
 ## Phase 9 — Publication-readiness report → owner approval → public ⏳

@@ -17,8 +17,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * HTTP client for the gateway's mod API. Requests go out asynchronously; replies come back through a
- * long-poll loop on a daemon thread. Nothing received from the gateway is ever executed as a command:
- * in this version the only thing the mod does with gateway data is show text to a player.
+ * long-poll loop on a daemon thread. Nothing received from the gateway is ever executed as a command: the mod
+ * shows text, places validated block data (builds, example packs) and reports back.
  */
 public final class GatewayClient {
     private static final Logger LOG = LoggerFactory.getLogger("mcai");
@@ -48,6 +48,20 @@ public final class GatewayClient {
 
     public CompletableFuture<JsonObject> get(String path) {
         return send(request(path).timeout(Duration.ofSeconds(10)).GET().build());
+    }
+
+    /** GET a binary file (example pack sections). Fails on any status but 200 or a body above maxBytes. */
+    public CompletableFuture<byte[]> getBytes(String path, int maxBytes) {
+        HttpRequest req = request(path).timeout(Duration.ofSeconds(60)).GET().build();
+        return http.sendAsync(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(resp -> {
+            if (resp.statusCode() != 200) {
+                throw new IllegalStateException("download failed (HTTP " + resp.statusCode() + ")");
+            }
+            if (resp.body().length > maxBytes) {
+                throw new IllegalStateException("file too large");
+            }
+            return resp.body();
+        });
     }
 
     private CompletableFuture<JsonObject> send(HttpRequest req) {

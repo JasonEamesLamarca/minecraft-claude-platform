@@ -116,10 +116,17 @@ class Gateway:
         for row in store.fail_unfinished("gateway restarted"):
             store.audit("request.interrupted", request_id=row["id"], player_uuid=row["player_uuid"],
                         previous_status=row["status"], reason="gateway restarted")
+        from .examples import Examples
+        self.examples = Examples(self, Path(settings.data_dir) / "examples", settings.examples_catalog,
+                                 blocks_per_tick=settings.examples_blocks_per_tick,
+                                 max_file_bytes=settings.examples_max_file_mb * 1024 * 1024,
+                                 max_install_blocks=settings.examples_max_install_blocks, clock=clock)
         self.automation = Engine(self, now=wallclock, default_tz=settings.automation_timezone,
                                  max_runs_per_minute=settings.automation_max_runs_per_minute,
                                  ai_calls_per_hour=settings.automation_ai_calls_per_hour,
-                                 examples_dir=settings.automation_examples_dir)
+                                 examples_dir=settings.automation_examples_dir,
+                                 extra_example_dirs=sorted(settings.examples_catalog.parent.glob("*/automations"))
+                                 if settings.examples_catalog else ())
 
     # ---------- policy ----------
     def limits(self) -> Limits:
@@ -390,6 +397,7 @@ class Gateway:
         with self.cond:
             self.heartbeat, self.heartbeat_at = stats, self.clock()
         world = body.get("world") if isinstance(body.get("world"), dict) else {}
+        self.examples.on_heartbeat(body.get("example_job"))
         self.automation.on_heartbeat({**stats, "players": list(online)}, world)
         return {"ok": True, "areas": self.automation.areas()}
 
@@ -756,6 +764,14 @@ def make_handler(gw: Gateway):
             self.end_headers()
             self.wfile.write(data)
 
+        def _send_bytes(self, data: bytes) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
         def _auth(self, which: str) -> bool:
             expected = {"mod": gw.s.mod_token, "worker": gw.s.worker_token, "mgmt": gw.s.management_token}[which]
             got = self.headers.get("Authorization", "")
@@ -771,7 +787,8 @@ def make_handler(gw: Gateway):
                 n = int(self.headers.get("Content-Length", "0"))
             except ValueError:
                 n = -1
-            limit = MAX_BODY * 64 if self.path.startswith(("/v1/worker/", "/v1/mod/heartbeat")) else \
+            limit = gw.s.examples_max_file_mb * 1400 * 1024 + 65536 if self.path.startswith("/v1/mgmt/upload") else \
+                MAX_BODY * 64 if self.path.startswith(("/v1/worker/", "/v1/mod/heartbeat")) else \
                 MAX_BODY * 8 if self.path.startswith("/v1/mgmt/run") else MAX_BODY
             if n < 0 or n > limit:
                 self._send(413, {"message": "request too large"})
@@ -809,6 +826,15 @@ def make_handler(gw: Gateway):
                 if self._auth(api):
                     self._send(200, fn())
                 return
+            m = re.fullmatch(r"/v1/mod/examples/([0-9a-f]{8})/([a-z0-9][a-z0-9-]{0,63}\.schem)", u.path)
+            if m:
+                if self._auth("mod"):
+                    data = gw.examples.file_for_mod(m.group(1), m.group(2))
+                    if data is None:
+                        self._send(404, {"message": "not found"})
+                    else:
+                        self._send_bytes(data)
+                return
             self._send(404, {"message": "not found"})
 
         def do_POST(self):
@@ -823,6 +849,7 @@ def make_handler(gw: Gateway):
                 "/v1/mod/heartbeat": ("mod", gw.heartbeat_in),
                 "/v1/mod/game-events": ("mod", gw.game_event),
                 "/v1/mgmt/run": ("mgmt", lambda b: management.run(gw, b)),
+                "/v1/mgmt/upload": ("mgmt", lambda b: management.run(gw, b, upload=True)),
                 "/v1/mgmt/ssh-event": ("mgmt", lambda b: management.ssh_event(gw, b)),
                 "/v1/mgmt/session": ("mgmt", lambda b: management.session_event(gw, b)),
             }
@@ -836,6 +863,11 @@ def make_handler(gw: Gateway):
                 if m:
                     if self._auth("mod") and (body := self._body()) is not None:
                         self._send(200, gw.report(m.group(1), body))
+                    return
+                m = re.fullmatch(r"/v1/mod/examples/([0-9a-f]{8})/report", u.path)
+                if m:
+                    if self._auth("mod") and (body := self._body()) is not None:
+                        self._send(200, gw.examples.report(m.group(1), body))
                     return
                 m = re.fullmatch(r"/v1/worker/jobs/([0-9a-f]{6,12})/result", u.path)
                 if m:

@@ -1,4 +1,4 @@
-# Threat model (v4, Phase 5)
+# Threat model (v5, Phase 6)
 
 STRIDE-style model of the architecture. **Status** says what is implemented and tested, and what is still planned.
 The model is reviewed at every phase gate.
@@ -28,7 +28,7 @@ actions).
 4. ai-worker → AI provider (internet)
 5. Admin → ssh-gateway (internet/LAN)
 6. ssh-gateway → management API
-7. Example download (GitHub release) → gateway
+7. Example download (GitHub release) → admin's `mcai` client → SSH → gateway → mod
 8. Automation definitions (admins, the AI) → automation engine (inside the gateway)
 
 ## Threats and planned mitigations
@@ -123,3 +123,23 @@ New residual risks (Phase 5):
   and run is audited with the owner.
 - A run interrupted by a crash is not repeated (at most once), so an action can be skipped.
 - Advancement events depend on a mixin into Minecraft code; a Minecraft update needs a matching mod build.
+
+## Implementation status (Phase 6: example packs)
+
+| # | Status | Tests |
+| --- | --- | --- |
+| T10 | **Implemented (ADR-0012):** packs are block data only (Sponge v3 `.schem` + JSON manifest), never archives or scripts. The client downloads only `https` release assets of this project from github.com (asset hosts only as redirect targets, each redirect checked, size caps) and checks the manifest against the SHA-256 pinned in `examples/catalog.json`, then every section against the manifest. The gateway re-checks everything: strict manifest schema (no paths, no overlap, totals), per-file hash and size, bounded gzip (cap from the declared dimensions), bounded NBT (depth, tag count, list/array lengths, no trailing data), palette size and exact varint data. Block entities, entities and denied blocks (command/structure blocks, jigsaw, spawners, TNT, lava, fire, portals, bedrock...) are refused. The mod checks the hash again, parses with an NBT size tracker and the game's block parser (NBT disabled) and applies the deny-list. Before placing: world height, protected areas, overlap with other installs, size limit; undo snapshots per chunk piece; one job at a time | `test_examples.py` (88 tests incl. path traversal, zip/gzip bomb, depth bomb, lying list lengths, block entities with commands, denied blocks, URL allowlist), `test_examples_flow.py` (14: official/unofficial, rejected uploads, site checks, repair/rollback/cancel/forget, roles, restart), `test_cli.py` (download checks), mod `ExamplePlacerTest`, operational test (download → install → blocks in the world → rollback → area restored) |
+| T2 | Extended: an example install is size-limited (`EXAMPLES_MAX_INSTALL_BLOCKS`), checked against protected areas and other installs, previewed before `--yes`, and reversible (rollback) until its snapshots are deleted | as above |
+| T7 | `example_restore` (changes the world) is a privileged automation action: an admin's automation using it waits for the owner | `test_example_tour_and_restore` |
+| T9 | `examples.read` (auditor, staff), `examples.manage` and `examples.install` (admin, owner) | `test_roles` |
+
+Fixed in Phase 6: zombie processes could exhaust the ssh-gateway's `pids_limit` (a self-inflicted denial of
+service after ~60 SSH sessions); the platform's containers now run an init that reaps them.
+
+New residual risks (Phase 6):
+- Rolling back an install also removes anything players built in its area afterwards (the command says so and asks
+  for `--yes`).
+- Undo snapshots use disk space until rolled back or forgotten (several hundred MB for Atlantis Full).
+- The generated city's lamps include lit redstone lamps that switch off after a nearby block update (a vanilla
+  behaviour of unpowered lamps). Cosmetic; a repair turns them on again.
+

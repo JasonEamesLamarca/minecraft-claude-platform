@@ -48,6 +48,10 @@ def _optional_dir(path: str) -> Path | None:
     return Path(path) if path and Path(path).is_dir() else None
 
 
+def _optional_file(path: str) -> Path | None:
+    return Path(path) if path and Path(path).is_file() else None
+
+
 @dataclass(frozen=True)
 class GatewaySettings:
     host: str
@@ -87,6 +91,11 @@ class GatewaySettings:
     automation_ai_calls_per_hour: int = 10
     automation_workers: int = 2
     automation_examples_dir: Path | None = None
+    # example packs (Phase 6)
+    examples_catalog: Path | None = None
+    examples_blocks_per_tick: int = 4000
+    examples_max_file_mb: int = 8
+    examples_max_install_blocks: int = 300_000_000
 
     @classmethod
     def from_env(cls) -> "GatewaySettings":
@@ -130,6 +139,10 @@ class GatewaySettings:
             automation_workers=env_int("AUTOMATION_WORKERS", 2, 1, 8),
             automation_examples_dir=_optional_dir(os.environ.get("AUTOMATION_EXAMPLES_DIR",
                                                                  "/app/automation-examples")),
+            examples_catalog=_optional_file(os.environ.get("EXAMPLES_CATALOG", "/app/examples/catalog.json")),
+            examples_blocks_per_tick=env_int("EXAMPLES_BLOCKS_PER_TICK", 4000, 100, 50_000),
+            examples_max_file_mb=env_int("EXAMPLES_MAX_FILE_MB", 8, 1, 8),
+            examples_max_install_blocks=env_int("EXAMPLES_MAX_INSTALL_BLOCKS", 300_000_000, 1, 2_000_000_000),
         )
 
 
