@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
@@ -27,6 +28,7 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtSizeTracker;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.structure.StructurePlacementData;
 import net.minecraft.structure.StructureTemplate;
@@ -35,6 +37,7 @@ import net.minecraft.util.Clearable;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.WorldSavePath;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Vec3i;
 
 /**
@@ -61,6 +64,9 @@ public final class ExamplePlacer {
     static final Pattern FILE = Pattern.compile("[a-z0-9][a-z0-9-]{0,63}\\.schem");
     static final Pattern SNAPSHOT = Pattern.compile("s(\\d{1,3})_(m?\\d{1,8})_(m?\\d{1,3})_(m?\\d{1,8})");
     private static final int FLAGS = Block.NOTIFY_LISTENERS | Block.FORCE_STATE | Block.SKIP_DROPS;
+    /** Keeps the chunk being worked on loaded for 30 s after the last request. */
+    private static final ChunkTicketType<ChunkPos> TICKET =
+            ChunkTicketType.create("mcai_example", Comparator.comparingLong(ChunkPos::toLong), 600);
 
     record Section(String file, String sha256, int bytes, int[] offset, int[] size) {
     }
@@ -352,6 +358,16 @@ public final class ExamplePlacer {
         report(id, "forgotten", null);
     }
 
+    /**
+     * True when the chunk is loaded. Otherwise it is requested with a ticket and loads (or generates) in the
+     * background: the server thread never waits for a chunk, which on slow hosts could exceed the watchdog.
+     */
+    static boolean chunkReady(ServerWorld world, int cx, int cz) {
+        ChunkPos p = new ChunkPos(cx, cz);
+        world.getChunkManager().addTicket(TICKET, p, 0, p);
+        return world.getChunkManager().isChunkLoaded(cx, cz);
+    }
+
     static Identifier snapshotId(String install, String name) {
         return Identifier.of("mcai", "examples/" + install + "/" + name);
     }
@@ -451,11 +467,16 @@ public final class ExamplePlacer {
                 return;
             }
             Piece pc = j.pieces.get(j.piece);
+            if (j.snapshotted && !chunkReady(j.world, pc.x1() >> 4, pc.z1() >> 4)) {
+                return;                                 // unloaded between ticks: wait for it
+            }
             if (!j.snapshotted) {
                 if (snapshots >= 2) {
-                    return;                             // at most two snapshots (and chunk loads) per tick
+                    return;                             // at most two snapshots per tick
                 }
-                j.world.getChunk(pc.x1() >> 4, pc.z1() >> 4);
+                if (!chunkReady(j.world, pc.x1() >> 4, pc.z1() >> 4)) {
+                    return;                             // loading in the background; try again next tick
+                }
                 String name = snapshotName(j.sec, pc.x1(), pc.y1(), pc.z1());
                 if (!Files.exists(snapshotDir(server, j.id).resolve(name + ".nbt"))) {
                     Identifier sid = snapshotId(j.id, name);
@@ -504,15 +525,18 @@ public final class ExamplePlacer {
     private void rollbackStep(MinecraftServer server, Job j) throws IOException {
         StructureTemplateManager mgr = server.getStructureTemplateManager();
         if (j.restored < j.restore.size()) {
-            Path f = j.restore.get(j.restored++);
+            Path f = j.restore.get(j.restored);
             String name = f.getFileName().toString().replace(".nbt", "");
             int[] o = snapshotOrigin(name);
+            if (o != null && !chunkReady(j.world, o[0] >> 4, o[2] >> 4)) {
+                return;                                 // loading in the background; try again next tick
+            }
+            j.restored++;
             if (o != null) {
                 Identifier sid = snapshotId(j.id, name);
                 StructureTemplate t = mgr.getTemplate(sid).orElse(null);
                 if (t != null) {
                     BlockPos at = new BlockPos(o[0], o[1], o[2]);
-                    j.world.getChunk(o[0] >> 4, o[2] >> 4);
                     // FORCE_STATE: restore verbatim, no neighbour shape updates (they could load chunks outside the
                     // area synchronously and stall the server thread)
                     t.place(j.world, at, at, new StructurePlacementData().setUpdateNeighbors(false), j.world.getRandom(),
