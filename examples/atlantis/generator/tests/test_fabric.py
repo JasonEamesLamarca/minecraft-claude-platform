@@ -5,6 +5,7 @@ from collections import deque
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+TF = float(__import__('os').environ.get('ATLANTIS_TIME_FACTOR', '1'))   # slow CI runners: > 1
 
 from atlantis import config, fabric, planner as PL, dome as D, orchestrate
 from atlantis import export_tiles as E
@@ -184,7 +185,7 @@ def test_timing():
         dt = (time.time() - t0) / 3
         worst = max(worst, dt)
         print(f'  tile ({tx},{tz}) fabric build {dt * 1000:.0f} ms')
-    assert worst < 0.15, worst
+    assert worst < 0.15 * TF, worst
     print('timing ok (worst %.0f ms)' % (worst * 1000))
 
 

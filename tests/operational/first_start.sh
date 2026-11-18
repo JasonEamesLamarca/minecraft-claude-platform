@@ -100,15 +100,15 @@ echo "ok: forbidden block rejected"
 
 step "SSH administration: owner over the mcai CLI, auditor is read-only, escalation refused, revocation works"
 export XDG_CONFIG_HOME="$WORK/.optest-cli"
-M() { management-cli/mcai "$@"; }
+M() { management-cli/mcai "$@"; }   # pipe into grep >/dev/null, not grep -q: an early exit would SIGPIPE ssh (255)
 hostkey="$(docker compose exec -T ssh-gateway python3 -m mcai.sshgw hostkey)"
 M remote add owner localhost --port "$SSH_PORT" --identity .optest-keys/owner --host-key "$hostkey"
 M remote add ann localhost --port "$SSH_PORT" --identity .optest-keys/ann --host-key "$hostkey"
-M whoami | grep -q '^Account owner (owner)'
-for _ in $(seq 1 40); do M status | grep -q '^Server: online' && break; sleep 3; done   # heartbeat every 30 s
-M status | grep -q '^Server: online'
-M whitelist list | grep -q "$OWNER"
-M logs -n 20 | grep -q 'mcai'
+M whoami | grep >/dev/null '^Account owner (owner)'
+for _ in $(seq 1 40); do M status | grep >/dev/null '^Server: online' && break; sleep 3; done   # heartbeat every 30 s
+M status | grep >/dev/null '^Server: online'
+M whitelist list | grep >/dev/null "$OWNER"
+M logs -n 20 | grep >/dev/null 'mcai'
 M accounts add ann auditor "$(cat .optest-keys/ann.pub)"
 for _ in $(seq 1 15); do M -r ann status >/dev/null 2>&1 && break; sleep 1; done   # keys reach sshd within 5 s
 M -r ann status >/dev/null
@@ -134,7 +134,7 @@ M accounts key-revoke "$fp"
 for _ in $(seq 1 15); do set +e; M -r ann status >/dev/null 2>&1; rc=$?; set -e; [[ $rc -eq 255 ]] && break; sleep 1; done
 [[ $rc -eq 255 ]] || { echo "revoked key still accepted by sshd (rc=$rc)"; exit 1; }
 echo "ok: revoked key refused by sshd"
-M audit verify | grep -q 'Audit chain intact'
+M audit verify | grep >/dev/null 'Audit chain intact'
 AUDIT | grep -q '"result": "accepted"'
 AUDIT | grep -q '"event": "account.key_revoked"'
 AUDIT | grep -q '"event": "mgmt.denied"'
@@ -150,30 +150,30 @@ event = "server.started"
 type = "broadcast"
 text = "optest automation ran"
 TOML
-M automations validate .optest-auto.toml | grep -q '^Valid'
-M automations import .optest-auto.toml | grep -q "Saved 'optest-hello' (version 1): enabled"
+M automations validate .optest-auto.toml | grep >/dev/null '^Valid'
+M automations import .optest-auto.toml | grep >/dev/null "Saved 'optest-hello' (version 1): enabled"
 M automations run optest-hello >/dev/null
 for _ in $(seq 1 15); do docker compose logs --since 1m minecraft | grep -q '(broadcast) optest automation ran' && break; sleep 1; done
 docker compose logs --since 1m minecraft | grep -q '(broadcast) optest automation ran'
 printf 'id = "optest-bad"\nname = "Bad"\n[trigger]\nevery = "1h"\n[[actions]]\ntype = "command"\ncommand = "op Eve"\n' > .optest-bad.toml
 set +e; out="$(M automations import .optest-bad.toml 2>&1)"; set -e
 [[ "$out" == *"can't run commands"* ]] || { echo "forbidden action accepted: $out"; exit 1; }
-M automations examples | grep -q 'promote-builders'
+M automations examples | grep >/dev/null 'promote-builders'
 M automations install night-reminder >/dev/null
 printf 'id = "optest-night"\nname = "Night"\nenabled = true\n[trigger]\nevent = "world.night_start"\n[[actions]]\ntype = "log"\ntext = "night fell"\n' > .optest-night.toml
 M automations import .optest-night.toml >/dev/null
 R "time set 1000"; sleep 35; R "time set 13500"            # the heartbeat (every 30 s) carries the world time
 for _ in $(seq 1 25); do AUDIT | grep -q '"message": "night fell"' && break; sleep 2; done
 AUDIT | grep -q '"message": "night fell"' || { echo "night automation did not run"; exit 1; }
-M automations runs | grep -q 'optest-night'
+M automations runs | grep >/dev/null 'optest-night'
 if docker compose logs minecraft | grep -qi 'mixin.*\(error\|fail\)'; then echo "mixin problem in server log"; exit 1; fi
 echo "ok: automations imported, run, refused and triggered by a world event"
 
 step "examples: Atlantis Lite through the mcai client (local build), checked, installed, rolled back"
 scripts/build-examples.sh lite >/dev/null            # deterministic: matches examples/catalog.json -> official
-M examples download atlantis-lite --from dist/examples | grep -q 'ready to install'
-M examples list | grep -qE 'atlantis-lite +1\.0\.0 +ready '
-M automations examples | grep -q 'atlantis-tour'
+M examples download atlantis-lite --from dist/examples | grep >/dev/null 'ready to install'
+M examples list | grep -E >/dev/null 'atlantis-lite +1\.0\.0 +ready '
+M automations examples | grep >/dev/null 'atlantis-tour'
 AX=2000; AY=-56; AZ=2000                               # far from spawn, recommended floor height
 # probe blocks: a few distinctive cells of the pack, as world coordinates "x y z block"
 probes="$(python3 - "$AX" "$AY" "$AZ" <<'PY'
@@ -201,19 +201,19 @@ PY
 probe_count() { local n=0; while read -r x y z b; do is_block "$x" "$y" "$z" "$b" </dev/null && n=$((n+1)); done <<<"$probes"; echo $n; }
 while read -r x y z b; do R "forceload add $x $z" </dev/null >/dev/null; done <<<"$probes"; sleep 3   # exec -T would eat the loop input
 [[ $(probe_count) -eq 0 ]] || { echo "probe blocks already there before installing"; exit 1; }
-M examples install atlantis-lite --at $AX $AY $AZ | grep -q 'Re-run with --yes'
-M examples install atlantis-lite --at $AX $AY $AZ --yes | grep -q 'Started install'
+M examples install atlantis-lite --at $AX $AY $AZ | grep >/dev/null 'Re-run with --yes'
+M examples install atlantis-lite --at $AX $AY $AZ --yes | grep >/dev/null 'Started install'
 iid="$(M --json examples installs | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])')"
 set +e; out="$(M examples install atlantis-lite --at $AX $AY $AZ --yes 2>&1)"; set -e
 [[ "$out" == *"is placing"* || "$out" == *"overlap"* ]] || { echo "second install not refused: $out"; exit 1; }
-for _ in $(seq 1 180); do M examples status "$iid" | grep -q "atlantis-lite 1.0.0, placed" && break; sleep 5; done
+for _ in $(seq 1 180); do M examples status "$iid" | grep >/dev/null "atlantis-lite 1.0.0, placed" && break; sleep 5; done
 M examples status "$iid"
-M examples status "$iid" | grep -q "atlantis-lite 1.0.0, placed" || { echo "install did not finish"; exit 1; }
+M examples status "$iid" | grep >/dev/null "atlantis-lite 1.0.0, placed" || { echo "install did not finish"; exit 1; }
 [[ $(probe_count) -eq $(wc -l <<<"$probes") ]] || { echo "pack blocks missing after install"; exit 1; }
 echo "ok: Atlantis Lite installed ($(wc -l <<<"$probes") probe blocks present)"
-M examples rollback "$iid" --yes | grep -q 'Rolling back'
-for _ in $(seq 1 120); do M examples status "$iid" | grep -q ", rolled_back" && break; sleep 5; done
-M examples status "$iid" | grep -q ", rolled_back" || { echo "rollback did not finish"; exit 1; }
+M examples rollback "$iid" --yes | grep >/dev/null 'Rolling back'
+for _ in $(seq 1 120); do M examples status "$iid" | grep >/dev/null ", rolled_back" && break; sleep 5; done
+M examples status "$iid" | grep >/dev/null ", rolled_back" || { echo "rollback did not finish"; exit 1; }
 [[ $(probe_count) -eq 0 ]] || { echo "pack blocks still there after rollback"; exit 1; }
 AUDIT | grep -q '"event": "examples.rolled_back"'
 while read -r x y z b; do R "forceload remove $x $z" </dev/null >/dev/null; done <<<"$probes"

@@ -4,6 +4,7 @@ import json, math, os, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+TF = float(__import__('os').environ.get('ATLANTIS_TIME_FACTOR', '1'))   # slow CI runners: > 1
 
 from atlantis import config, dome
 from atlantis import export_tiles as E
@@ -213,7 +214,7 @@ def test_timing():
     for label, x, z in points():
         t0 = time.time(); E.build_tile(ctx, *tile_at(x, z), FEATS); dt = time.time() - t0
         worst = max(worst, dt)
-        assert dt < 0.2, (label, dt)
+        assert dt < 0.2 * TF, (label, dt)
     print(f'  timing: worst tile {worst * 1000:.0f} ms')
 
 

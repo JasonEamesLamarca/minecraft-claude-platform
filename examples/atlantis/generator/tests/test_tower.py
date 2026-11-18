@@ -5,6 +5,7 @@ from collections import deque
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+TF = float(__import__('os').environ.get('ATLANTIS_TIME_FACTOR', '1'))   # slow CI runners: > 1
 
 from atlantis import config, tower, tower_spec as S, blocks as B, export_tiles as E, validate as V
 from atlantis.validate import walk as W
@@ -239,7 +240,7 @@ def test_timing():
             E.build_tile(ctx, tx, tz, [tower.FEATURE])
             worst = max(worst, time.perf_counter() - t0)
     print(f'  first tile (incl. one-time tables) {first * 1000:.0f} ms, worst warm tile {worst * 1000:.0f} ms')
-    assert first < 0.5 and worst < 0.3
+    assert first < 0.5 * TF and worst < 0.3 * TF
 
 
 if __name__ == '__main__':

@@ -7,6 +7,7 @@ import copy, json, math, os, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+TF = float(__import__('os').environ.get('ATLANTIS_TIME_FACTOR', '1'))   # slow CI runners: > 1
 
 from atlantis import config, feature
 from atlantis import export_tiles as E
@@ -384,7 +385,7 @@ def test_timing_report():
     rep = V.validate(ctx, [(0, 0)], f, 'all', jobs=1)
     dt = time.perf_counter() - t0
     print(f'    busy dome tile, all checks: {dt * 1000:.0f} ms')
-    assert dt < 3
+    assert dt < 3 * TF
 
 
 if __name__ == '__main__':

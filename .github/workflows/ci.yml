@@ -86,6 +86,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Generator tests (each file in its own process)
+        env:
+          ATLANTIS_TIME_FACTOR: "6"     # timing limits are for an idle machine; runners are shared and slower
         run: python3 examples/atlantis/generator/tests/run_all.py -j 4
       - name: Catalog hashes match the generator source (Atlantis Lite rebuilt)
         run: scripts/build-examples.sh --check

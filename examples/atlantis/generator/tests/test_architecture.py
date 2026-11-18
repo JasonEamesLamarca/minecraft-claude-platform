@@ -3,6 +3,7 @@
 """
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TF = float(__import__('os').environ.get('ATLANTIS_TIME_FACTOR', '1'))   # slow CI runners: > 1
 
 from atlantis.volume import Volume
 from atlantis import architecture as A, blocks as B, geometry as G, palette as P
@@ -84,7 +85,7 @@ def test_determinism_and_params():
     t = time.time()
     for name in A.COMPONENTS:
         draw(name, far, 'north')
-    assert time.time() - t < 0.05
+    assert time.time() - t < 0.05 * TF
     assert not list(far.items())
     # parameters change the result
     v1 = Volume(*BIG); v2 = Volume(*BIG)

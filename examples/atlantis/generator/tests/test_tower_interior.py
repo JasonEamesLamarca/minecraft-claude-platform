@@ -14,6 +14,7 @@ import math, os, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+TF = float(__import__('os').environ.get('ATLANTIS_TIME_FACTOR', '1'))   # slow CI runners: > 1
 sys.path.insert(0, os.path.join(ROOT, 'tests'))
 
 from atlantis import config, tower_spec as T, export_tiles as E
@@ -206,7 +207,7 @@ def test_timing():
             dt = time.perf_counter() - t0
             worst = max(worst, dt)
     print(f'timing: worst cold tile (all 15 interior plans built) {worst * 1000:.0f} ms')
-    assert worst < 0.3, f'too slow: {worst:.3f}s'
+    assert worst < 0.3 * TF, f'too slow: {worst:.3f}s'
     TI.build_plan.cache_clear()
     t0 = time.perf_counter()
     for tx in range(-2, 2):

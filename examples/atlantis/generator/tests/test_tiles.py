@@ -4,6 +4,7 @@ import gzip, json, math, os, struct, sys, tempfile, time, zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+TF = float(__import__('os').environ.get('ATLANTIS_TIME_FACTOR', '1'))   # slow CI runners: > 1
 
 from atlantis import config, background, feature, anvil
 from atlantis import export_tiles as E
@@ -178,7 +179,7 @@ def test_timing():
         v = E.build_tile(ctx, k, 0, feats); E.write_tile(ctx, k, 0, v, d)
     per = (time.time() - t0) / n
     print(f'  {per:.2f} s/tile (build + write, single process)')
-    assert per < 2.0
+    assert per < 2.0 * TF
 
 
 if __name__ == '__main__':

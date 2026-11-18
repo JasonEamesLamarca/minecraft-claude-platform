@@ -3,6 +3,7 @@
 """
 import math, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TF = float(__import__('os').environ.get('ATLANTIS_TIME_FACTOR', '1'))   # slow CI runners: > 1
 
 from atlantis.volume import Volume
 from atlantis import geometry as G, blocks as B
@@ -251,13 +252,13 @@ def test_timing():
         v = Volume(tx, -8, 0, tx + 31, 118, 31)
         G.dome_cap(v, 0, 0, 0, 600, 100, 3, W, smooth=True)
     dt = (time.time() - t) / 4
-    assert dt < 0.2, dt
+    assert dt < 0.2 * TF, dt
     t = time.time()
     v = Volume(0, -8, 0, 31, 118, 31)
     G.disc(v, 0, 0, 600, 0, W); G.ring(v, 0, 0, 590, 600, 1, W, 20); G.circle_outline(v, 15, 15, 20, 5, W, 30)
     G.cylinder(v, 0, 0, 600, 0, 100, W, hollow=True, thickness=2)
     G.frustum(v, 0, 0, 0, 100, 600, 560, W, hollow=True, smooth=True)
-    assert time.time() - t < 0.5
+    assert time.time() - t < 0.5 * TF
     print('timing ok: 600-radius cap shell into one 32x32x127 tile: %.1f ms on average' % (dt * 1000))
 
 
