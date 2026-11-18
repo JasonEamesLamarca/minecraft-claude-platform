@@ -64,9 +64,12 @@ public final class ExamplePlacer {
     static final Pattern FILE = Pattern.compile("[a-z0-9][a-z0-9-]{0,63}\\.schem");
     static final Pattern SNAPSHOT = Pattern.compile("s(\\d{1,3})_(m?\\d{1,8})_(m?\\d{1,3})_(m?\\d{1,8})");
     private static final int FLAGS = Block.NOTIFY_LISTENERS | Block.FORCE_STATE | Block.SKIP_DROPS;
-    /** Keeps the chunk being worked on loaded for 30 s after the last request. */
+    /**
+     * Keeps the chunk being worked on loaded. Released as soon as its piece is done; the expiry (5 s) is only a
+     * safety net. Holding chunks longer kept hundreds loaded during a rollback and exhausted a 1 GB heap.
+     */
     private static final ChunkTicketType<ChunkPos> TICKET =
-            ChunkTicketType.create("mcai_example", Comparator.comparingLong(ChunkPos::toLong), 600);
+            ChunkTicketType.create("mcai_example", Comparator.comparingLong(ChunkPos::toLong), 100);
 
     record Section(String file, String sha256, int bytes, int[] offset, int[] size) {
     }
@@ -368,6 +371,11 @@ public final class ExamplePlacer {
         return world.getChunkManager().isChunkLoaded(cx, cz);
     }
 
+    static void releaseChunk(ServerWorld world, int cx, int cz) {
+        ChunkPos p = new ChunkPos(cx, cz);
+        world.getChunkManager().removeTicket(TICKET, p, 0, p);
+    }
+
     static Identifier snapshotId(String install, String name) {
         return Identifier.of("mcai", "examples/" + install + "/" + name);
     }
@@ -515,6 +523,7 @@ public final class ExamplePlacer {
                 }
             }
             if (j.cursor >= vol) {
+                releaseChunk(j.world, pc.x1() >> 4, pc.z1() >> 4);
                 j.piece++;
                 j.cursor = 0;
                 j.snapshotted = false;
@@ -543,6 +552,7 @@ public final class ExamplePlacer {
                             FLAGS);
                 }
                 mgr.unloadTemplate(sid);
+                releaseChunk(j.world, o[0] >> 4, o[2] >> 4);
             }
             j.done = j.restored;
             j.total = j.restore.size();
