@@ -368,7 +368,11 @@ public final class ExamplePlacer {
     static boolean chunkReady(ServerWorld world, int cx, int cz) {
         ChunkPos p = new ChunkPos(cx, cz);
         world.getChunkManager().addTicket(TICKET, p, 0, p);
-        return world.getChunkManager().isChunkLoaded(cx, cz);
+        // Not isChunkLoaded(): in 1.21.1 that is true as soon as the ticket raises the chunk's level, while the chunk
+        // may still be loading or generating, and the next block read then waits for it on the server thread (seen
+        // as a watchdog kill while placing Atlantis Full in ungenerated terrain). getWorldChunk() never waits: it
+        // returns the chunk only once it is fully loaded.
+        return world.getChunkManager().getWorldChunk(cx, cz) != null;
     }
 
     static void releaseChunk(ServerWorld world, int cx, int cz) {
