@@ -8,7 +8,11 @@ RUN apt-get update \
 # Pinned per the Claude Code dev container docs (npm install with an exact version + updater disabled).
 RUN npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /root/.npm \
  && claude --version
+# npm is only needed to install Claude Code: removing it drops its own dependencies (Trivy flagged several HIGH
+# CVEs there) and leaves the worker no package manager to fetch code with.
 ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
     HOME=/home/worker \

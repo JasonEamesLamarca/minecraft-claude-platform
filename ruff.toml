@@ -1,0 +1,14 @@
+# Lint for the platform's Python code (CI job "lint"). Run locally with:
+#   docker run --rm -v "$PWD:/repo" -w /repo ghcr.io/astral-sh/ruff:0.17.4 check
+target-version = "py312"
+line-length = 120
+# The Atlantis generator is ported code with its own tests; its output is pinned by the example catalog.
+extend-exclude = ["examples/atlantis/generator", "dist", "data", ".venv", ".cache"]
+
+[lint]
+# Real errors only: syntax, undefined names, unused imports/variables, f-string mistakes.
+select = ["E9", "F"]
+
+[lint.per-file-ignores]
+# pytest fixtures are imported by name and then used as parameters
+"tests/**" = ["F811"]

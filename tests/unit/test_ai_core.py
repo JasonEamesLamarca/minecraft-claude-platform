@@ -1,6 +1,5 @@
 """Unit tests: sanitizing, prompt delimiting, rate limiting, provider command line and output parsing."""
 import json
-import os
 import stat
 import sys
 import textwrap

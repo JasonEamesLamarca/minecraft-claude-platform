@@ -109,22 +109,68 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  images:
+  lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: build gateway, ai-worker and ssh-gateway images
+      - name: ruff (errors, undefined names, unused code; see ruff.toml)
+        run: >
+          docker run --rm -v "$PWD:/repo" -w /repo
+          ghcr.io/astral-sh/ruff@sha256:c4b7e7a87e4b07d66b569dd2e6b2ce5a25e38be91dd664dc49b9882be27acd9b
+          check --output-format github
+
+  images:
+    runs-on: ubuntu-24.04
+    env:
+      TRIVY: aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c # 0.76.1
+      SYFT: anchore/syft@sha256:3c70e6d5979364cefdc22b51617a78fd264574d3bd6b4f84a351204147025e2a # v1.57.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: build for linux/amd64 and linux/arm64
         run: |
-          docker build -f containers/gateway/Dockerfile -t mcai-gateway:ci .
-          docker build -f containers/claude/Dockerfile -t mcai-ai-worker:ci .
+          for spec in gateway:containers/gateway/Dockerfile ai-worker:containers/claude/Dockerfile \
+                      ssh-gateway:containers/management/Dockerfile; do
+            docker buildx build --platform linux/amd64,linux/arm64 -f "${spec#*:}" -t "mcai-${spec%%:*}:multiarch" .
+          done
+      - name: build gateway, ai-worker and ssh-gateway images (amd64, loaded for the checks below)
+        run: |
+          docker buildx build --load -f containers/gateway/Dockerfile -t mcai-gateway:ci .
+          docker buildx build --load -f containers/claude/Dockerfile -t mcai-ai-worker:ci .
           docker run --rm --entrypoint claude mcai-ai-worker:ci --version
           docker run --rm --entrypoint id mcai-ai-worker:ci -u | grep -qv '^0$'
+          docker run --rm --entrypoint sh mcai-ai-worker:ci -c '! command -v npm'
           docker run --rm --entrypoint id mcai-gateway:ci -u | grep -qv '^0$'
-          docker build -f containers/management/Dockerfile --build-arg PUID=1001 --build-arg PGID=1001 -t mcai-ssh-gateway:ci .
+          docker buildx build --load -f containers/management/Dockerfile --build-arg PUID=1001 --build-arg PGID=1001 -t mcai-ssh-gateway:ci .
           docker run --rm --entrypoint id mcai-ssh-gateway:ci -u | grep -qx 1001
           docker run --rm --entrypoint /usr/sbin/sshd mcai-ssh-gateway:ci -t -f /etc/mcai/sshd_config 2>&1 | grep -q 'no hostkeys' || true
+      - name: Trivy - images (fails on HIGH/CRITICAL with a fix available)
+        run: |
+          for img in mcai-gateway:ci mcai-ai-worker:ci mcai-ssh-gateway:ci; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$RUNNER_TEMP/trivy:/root/.cache/trivy" \
+              "$TRIVY" image --skip-version-check --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$img"
+          done
+      - name: Trivy - Dockerfiles and compose (fails on HIGH/CRITICAL)
+        run: >
+          docker run --rm -v "$PWD:/repo:ro" -v "$RUNNER_TEMP/trivy:/root/.cache/trivy"
+          "$TRIVY" config --skip-version-check --severity HIGH,CRITICAL --exit-code 1 /repo
+      - name: SBOMs (SPDX JSON)
+        run: |
+          mkdir -p sbom
+          for img in gateway ai-worker ssh-gateway; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$SYFT" \
+              "docker:mcai-$img:ci" -o spdx-json > "sbom/mcai-$img.spdx.json"
+          done
+          ls -l sbom
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom/
 
   operational:
     # Full first-start / AI / SSH / automations / Atlantis / backup / restore / crash-recovery cycle (~15 min).

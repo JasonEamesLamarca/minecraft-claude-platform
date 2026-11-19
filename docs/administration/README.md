@@ -458,6 +458,10 @@ mcai examples status <install>                       # progress; when done: plac
 - **What happens.** The server works through the pack chunk by chunk. Before it changes a chunk, it saves what
   is there (an undo snapshot in `world/generated/mcai/structures/examples/`). It then sets only the blocks that
   differ, `EXAMPLES_BLOCKS_PER_TICK` (4000) per tick. Lower that value if the server lags while placing.
+- **Keep players away while it installs.** Chunks near a player keep running: water from the old terrain in parts
+  not placed yet can flow into parts that are finished, and stays there as frozen streams once those parts are
+  placed. If anyone was in or near the area during the install, run `mcai examples repair <install>` once it is
+  done: it replaces every block that differs from the pack, including that water.
 - **One job at a time.** A second install, repair or rollback waits until the first is done; `mcai examples
   cancel <install>` stops one (it stays partly placed: repair or roll it back afterwards).
 

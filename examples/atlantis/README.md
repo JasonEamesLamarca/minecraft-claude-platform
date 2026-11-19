@@ -54,6 +54,10 @@ mcai automations install atlantis-tour && mcai automations enable atlantis-tour 
 For Lite, use `atlantis-lite` in the commands above, and change `atlantis-full` to `atlantis-lite` in the
 automations (`mcai automations export`, edit, `import --replace`).
 
+Stay out of the area until the install has finished (`mcai examples status` says *placed*). If players were nearby
+while it ran, run `mcai examples repair <install>` afterwards: water from the old terrain can otherwise leave
+frozen streams in the finished city.
+
 `--at X Y Z` is where the city centre goes, at floor level. You walk at Y + 5. With Y = -56 the glass roof is at sea
 level. `mcai examples rollback <install> --yes` restores the area. The
 [admin guide](../../docs/administration/README.md#example-builds-atlantis) has the details, and

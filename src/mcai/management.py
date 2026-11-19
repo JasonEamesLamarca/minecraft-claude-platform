@@ -264,7 +264,7 @@ def c_player_info(gw, actor, a, ctx):
     text = (f"{r['name']} ({r['uuid']}): role {r['role']}, {'online' if r['online'] else 'offline'}, first seen "
             f"{r['first_seen'][:10]}, last seen {r['last_seen'][:16].replace('T', ' ')}\n"
             f"Recent sessions: " + (", ".join(f"{x['joined_at'][:16].replace('T', ' ')}" for x in sess) or "-") + "\n"
-            f"Recent AI requests: " + (", ".join(f"{x['id']} {x['kind']} {x['status']}" for x in reqs) or "-"))
+            "Recent AI requests: " + (", ".join(f"{x['id']} {x['kind']} {x['status']}" for x in reqs) or "-"))
     return Result(text, data)
 
 
