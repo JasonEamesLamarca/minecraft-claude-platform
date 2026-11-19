@@ -9,7 +9,7 @@ Needs Python 3.9+ and the OpenSSH client (`ssh`; built into Windows 10+ and macO
   mcai players role Alex builder
   mcai logs -n 50          mcai logs --follow
   mcai automations import welcome.toml     (definition files are read here and sent to the server)
-  mcai examples download atlantis-lite      (downloads here, checks every checksum, sends it to the server)
+  mcai examples download atlantis-full      (downloads here, checks every checksum, sends it to the server)
   mcai help                (everything the server offers; what you may run depends on your role)
 
 Local commands: remote add|list|remove|default, version, tui (full-screen console; once: mcai tui --install). Everything else runs on the server, which checks your

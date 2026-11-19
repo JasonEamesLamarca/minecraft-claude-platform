@@ -1,3 +1,4 @@
+# Written for Atlantis Full. For Atlantis Lite, change "atlantis-full" to "atlantis-lite" below.
 # /ai trigger atlantis: the player gets the places worth seeing with their coordinates in this world.
 id = "atlantis-tour"
 name = "Atlantis tour"
@@ -14,7 +15,7 @@ text = "Atlantis tour, {player}: start at the central tower, then walk north alo
 
 [[actions]]
 type = "example_tour"
-example = "atlantis-lite"
+example = "atlantis-full"
 
 [limits]
 cooldown_s = 120

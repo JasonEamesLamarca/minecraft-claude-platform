@@ -1,5 +1,6 @@
+# Written for Atlantis Full. For Atlantis Lite, change "atlantis-full" to "atlantis-lite" below.
 # Greets players who walk into an installed Atlantis. The area follows the latest install of the pack, so
-# there are no coordinates to edit: install the pack first ('mcai examples install atlantis-lite ...').
+# there are no coordinates to edit: install the pack first ('mcai examples install atlantis-full ...').
 id = "atlantis-arrival"
 name = "Atlantis arrival"
 description = "Welcomes players entering the installed Atlantis and points them to the tour."
@@ -7,7 +8,7 @@ enabled = false
 
 [trigger]
 event = "player.enter_area"
-area = { name = "atlantis", example = "atlantis-lite" }
+area = { name = "atlantis", example = "atlantis-full" }
 
 [[actions]]
 type = "message"

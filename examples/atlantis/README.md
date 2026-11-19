@@ -31,23 +31,28 @@ Genuine screenshots of Atlantis Lite, installed with `mcai examples install` on 
 
 | Pack | Contents | Size | Blocks | Download |
 | --- | --- | --- | --- | --- |
-| **atlantis-lite** | a 96-block-wide cutaway from the tower along the north pier to the sea outside the dome | 96 x 127 x 768 | 9.4 million | 6 sections, 0.2 MB |
 | **atlantis-full** | the whole city and its sea floor | 1,600 x 127 x 1,600 | 255 million | 90 sections, 4.7 MB |
+| **atlantis-lite** | a 96-block-wide cutaway from the tower along the north pier to the sea outside the dome | 96 x 127 x 768 | 9.4 million | 6 sections, 0.2 MB |
 
-Lite is sealed with glass on its cut sides and top, so you can place it on land or under water. Full needs a deep
-ocean about 1,600 x 1,600 blocks wide: make a backup first.
+Both are in the release [`examples-1.0.0`](https://github.com/JasonEamesLamarca/minecraft-claude-platform/releases/tag/examples-1.0.0).
+Full is the city itself. It needs a deep ocean about 1,600 x 1,600 blocks wide and takes 30-80 minutes to place:
+make a backup first. Lite is a quick way to try it (about a minute). It is sealed with glass on its cut sides and
+top, so you can place it on land or under water.
 
 ## Install
 
 On a running platform (admin or owner):
 
 ```bash
-mcai examples download atlantis-lite
-mcai examples install atlantis-lite --at 2000 -56 2000          # shows the area and asks for --yes
-mcai examples install atlantis-lite --at 2000 -56 2000 --yes
+mcai examples download atlantis-full
+mcai examples install atlantis-full --at 2000 -56 2000          # shows the area and asks for --yes
+mcai examples install atlantis-full --at 2000 -56 2000 --yes
 mcai examples status <install>                                  # progress, then places to visit with coordinates
 mcai automations install atlantis-tour && mcai automations enable atlantis-tour   # /ai trigger atlantis
 ```
+
+For Lite, use `atlantis-lite` in the commands above, and change `atlantis-full` to `atlantis-lite` in the
+automations (`mcai automations export`, edit, `import --replace`).
 
 `--at X Y Z` is where the city centre goes, at floor level. You walk at Y + 5. With Y = -56 the glass roof is at sea
 level. `mcai examples rollback <install> --yes` restores the area. The

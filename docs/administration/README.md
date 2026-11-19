@@ -407,22 +407,22 @@ city under a glass dome, made by the project's own generator
 
 | Pack | What | Size | Install time |
 | --- | --- | --- | --- |
-| `atlantis-lite` | a 96-block-wide cutaway: the central tower, the Fountain Plaza district, a pier, the dome wall and the sea | 96 x 127 x 768, 9.4 million blocks, 0.2 MB | about a minute |
 | `atlantis-full` | the whole city: ten districts, six piers, a 1,200-block dome and the sea floor | 1,600 x 127 x 1,600, 255 million blocks, 4.7 MB | 30-80 minutes |
+| `atlantis-lite` | a 96-block-wide cutaway to try it quickly: the central tower, the Fountain Plaza district, a pier, the dome wall and the sea | 96 x 127 x 768, 9.4 million blocks, 0.2 MB | about a minute |
 
 ### Install
 
 ```bash
 mcai examples list                                   # what the server knows and has
-mcai examples download atlantis-lite                 # on your computer: download, check, send to the server
-mcai examples info atlantis-lite                     # size, anchor, places of interest
-mcai examples install atlantis-lite --at 2000 -56 2000          # preview: area, blocks, time
-mcai examples install atlantis-lite --at 2000 -56 2000 --yes    # place it
+mcai examples download atlantis-full                 # on your computer: download, check, send to the server
+mcai examples info atlantis-full                     # size, anchor, places of interest
+mcai examples install atlantis-full --at 2000 -56 2000          # preview: area, blocks, time
+mcai examples install atlantis-full --at 2000 -56 2000 --yes    # place it
 mcai examples status <install>                       # progress; when done: places of interest with coordinates
 ```
 
 - **Where.** `--at X Y Z` is where the pack's *anchor* goes: the city centre at floor level. People walk 5 blocks
-  higher. With Y = -56 (the recommended value) Atlantis Lite fills y -64 to 62, so its glass roof sits at sea level
+  higher. With Y = -56 (the recommended value) Atlantis fills y -64 to 62, so its glass roof sits at sea level
   in an ocean. Lite is sealed with glass on all sides, so it also works on land. Full needs a deep ocean of about
   1,600 x 1,600 blocks; make a backup before installing it.
 - **Checks before anything changes.** The pack must fit in the world's height, may not overlap a protected area

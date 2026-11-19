@@ -102,7 +102,8 @@ evidence named. Unverified items say so.
 | Malicious-manifest / hostile-file tests | ✅ | `test_examples.py` |
 | Operational: Lite downloaded via the CLI, installed on a fresh test server, blocks verified over RCON, rolled back | ✅ | `tests/operational/first_start.sh` (laptop, 18 Nov 2026) |
 | Renders of Lite (labelled renders) | ✅ | `examples/atlantis/screenshots/` |
-| GitHub release `examples-1.0.0` with the pack files | ⏳ | Needs the owner's go-ahead (release assets of the private repo) |
+| GitHub release `examples-1.0.0` with both packs (Full is the default in the docs and automations) | ✅ | Release created 19 Nov 2026; all 98 assets downloaded back and checked against the pinned SHA-256s |
+| Atlantis Full installed on a real server and walked in game | ⏳ | Next: laptop test stack |
 | In game with a real client: walk through Lite, arrival + tour automations, repair, rollback, reinstall; 10 screenshots | ✅ | Maintainer, vanilla 1.21.1 client, 19 Nov 2026; `examples/atlantis/screenshots/game-*.jpg` |
 ## Phase 7 — Hardening + full CI (tests, buildx multi-arch, Trivy, SBOM, release) ⏳
 ## Phase 8 — Docs, diagrams, genuine screenshots ⏳

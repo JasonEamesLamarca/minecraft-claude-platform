@@ -1,3 +1,4 @@
+# Written for Atlantis Full. For Atlantis Lite, change "atlantis-full" to "atlantis-lite" below.
 # Weekly repair: places the installed Atlantis again where blocks were broken or changed. Only cells that differ
 # are touched, and the original undo snapshots are kept. This changes the world, so it is privileged: an
 # admin can create it, but it runs only after the owner approves it ('mcai automations approve atlantis-restore').
@@ -12,12 +13,12 @@ schedule = "0 5 * * mon"
 
 [[actions]]
 type = "example_restore"
-example = "atlantis-lite"
+example = "atlantis-full"
 
 [[actions]]
 type = "notify_role"
 min_role = "operator"
-text = "Atlantis is being repaired (weekly restore). Expect some lag for a minute or two."
+text = "Atlantis is being repaired (weekly restore). Expect some lag while it runs (up to an hour for the full city)."
 
 [limits]
 on_error = "stop"
