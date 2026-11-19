@@ -9,6 +9,24 @@ plaza borrows Plato's description instead: an island ringed by bands of water an
 
 *Render made by the generator (`atlantis.orchestrate render`), not an in-game screenshot.*
 
+## In game
+
+Genuine screenshots of Atlantis Lite, installed with `mcai examples install` on the project's test server
+(Fabric 1.21.1, vanilla client, default settings, no shaders), 19 Nov 2026. Not edited, only converted to JPEG.
+
+| | |
+| --- | --- |
+| ![The central tower seen from its plaza, under the glass dome](screenshots/game-central-tower.jpg) | ![The top of the central tower](screenshots/game-tower-top.jpg) |
+| *The central tower from its plaza* | *The top of the tower* |
+| ![The Fountain Plaza with Plato's rings, seen from above](screenshots/game-fountain-plaza.jpg) | ![The Trident Arch over the fountain dais](screenshots/game-trident-arch.jpg) |
+| *The Fountain Plaza and its rings* | *The Trident Arch* |
+| ![The district along the grand avenue, seen from the tower](screenshots/game-district-from-tower.jpg) | ![Houses along the grand avenue](screenshots/game-grand-avenue.jpg) |
+| *The district, seen from the tower* | *The grand avenue* |
+| ![A hall beside the grand avenue](screenshots/game-avenue-hall.jpg) | ![A library inside the tower](screenshots/game-tower-library.jpg) |
+| *A hall beside the avenue* | *A library in the tower* |
+| ![A hall inside the tower; an automation's chat message at the bottom](screenshots/game-tower-hall-ai-message.jpg) | ![The dome roof from outside, at sea level](screenshots/game-dome-roof-at-sea-level.jpg) |
+| *Inside the tower, with the `night-reminder` automation's chat message* | *The glass roof at sea level, from outside* |
+
 ## Two sizes
 
 | Pack | Contents | Size | Blocks | Download |

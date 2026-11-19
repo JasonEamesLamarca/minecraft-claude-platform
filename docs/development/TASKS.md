@@ -87,7 +87,7 @@ evidence named. Unverified items say so.
 | Operational: import over SSH, forbidden action refused, run reaches the game, night event, mixin loads | ✅ | `tests/operational/first_start.sh` (laptop, 17 Nov 2026) |
 | In game with a real client: area greeting, `/ai trigger tour`, advancement event, welcome on first join | ✅ | Maintainer, 17 Nov 2026 |
 | Real Claude: `mcai automations propose` with the configured credential | ✅ | Maintainer, 17 Nov 2026 (proposal `evening-logoff-reminder`) |
-## Phase 6 — Atlantis (original; Lite + Full; examples CLI) ✅ (in-game check pending)
+## Phase 6 — Atlantis (original; Lite + Full; examples CLI) ✅
 
 | Task | Status | Verified by |
 | --- | --- | --- |
@@ -103,7 +103,7 @@ evidence named. Unverified items say so.
 | Operational: Lite downloaded via the CLI, installed on a fresh test server, blocks verified over RCON, rolled back | ✅ | `tests/operational/first_start.sh` (laptop, 18 Nov 2026) |
 | Renders of Lite (labelled renders) | ✅ | `examples/atlantis/screenshots/` |
 | GitHub release `examples-1.0.0` with the pack files | ⏳ | Needs the owner's go-ahead (release assets of the private repo) |
-| In game with a real client: walk through Lite, tour automation, screenshots | ⏳ | **Needs maintainer** |
+| In game with a real client: walk through Lite, arrival + tour automations, repair, rollback, reinstall; 10 screenshots | ✅ | Maintainer, vanilla 1.21.1 client, 19 Nov 2026; `examples/atlantis/screenshots/game-*.jpg` |
 ## Phase 7 — Hardening + full CI (tests, buildx multi-arch, Trivy, SBOM, release) ⏳
 ## Phase 8 — Docs, diagrams, genuine screenshots ⏳
 ## Phase 9 — Publication-readiness report → owner approval → public ⏳
