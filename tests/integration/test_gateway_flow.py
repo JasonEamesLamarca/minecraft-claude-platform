@@ -253,25 +253,27 @@ def test_audit_log_has_no_request_text_by_default(stack):
     assert all(a["ts"].endswith("Z") for a in stack.audit())
 
 
-def _abandoned_poll(url: str, path: str, token: str) -> None:
-    """Starts a long poll and then drops the connection hard (RST), like a worker or mod that is stopped while
-    waiting. The gateway's later reply to it fails."""
+def _abandoned_poll(url: str, path: str, token: str, hard: bool = True) -> None:
+    """Starts a long poll and then closes the connection, like a worker or mod that is stopped while waiting:
+    hard=True resets it (RST), hard=False closes it normally (FIN, what a stopped process does)."""
     import socket
     import struct
     host, port = url.removeprefix("http://").split(":")
     s = socket.create_connection((host, int(port)))
     s.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n\r\n".encode())
     time.sleep(0.3)                                    # the handler is now waiting inside the long poll
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    if hard:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
     s.close()
 
 
-def test_job_for_a_vanished_worker_is_queued_again(tmp_path):
+@pytest.mark.parametrize("hard", [True, False], ids=["reset", "closed"])
+def test_job_for_a_vanished_worker_is_queued_again(tmp_path, hard):
     """Regression: a worker stopped while polling made the gateway hand the next job to a dead connection; the
     job stayed 'running' until its timeout and the player never got an answer."""
     s = Stack(tmp_path, worker=False)
     try:
-        _abandoned_poll(s.url, "/v1/worker/jobs?wait=10", WORKER_TOKEN)
+        _abandoned_poll(s.url, "/v1/worker/jobs?wait=10", WORKER_TOKEN, hard)
         _, r = s.ask("asked while the worker was going away")
         time.sleep(1.5)                                # the abandoned poll takes the job, fails to send it
         assert s.gw.store.get(r["request_id"])["status"] == "queued"
@@ -281,10 +283,11 @@ def test_job_for_a_vanished_worker_is_queued_again(tmp_path):
         s.close()
 
 
-def test_events_for_a_vanished_mod_are_kept(tmp_path):
+@pytest.mark.parametrize("hard", [True, False], ids=["reset", "closed"])
+def test_events_for_a_vanished_mod_are_kept(tmp_path, hard):
     s = Stack(tmp_path)
     try:
-        _abandoned_poll(s.url, "/v1/mod/events?wait=10", MOD_TOKEN)
+        _abandoned_poll(s.url, "/v1/mod/events?wait=10", MOD_TOKEN, hard)
         _, r = s.ask("hello")                          # the mock worker answers; the answer is an event for the mod
         time.sleep(1.5)
         ev = s.events_until(1)
@@ -308,5 +311,21 @@ def test_return_job_and_events_keep_order(tmp_path):
         s.gw.events.append({"id": "c"})
         s.gw.return_events([{"id": "a"}, {"id": "b"}])
         assert [e["id"] for e in s.gw.take_events(0)] == ["a", "b", "c"]
+    finally:
+        s.close()
+
+
+def test_no_job_or_event_for_a_poller_that_is_gone(tmp_path):
+    """The liveness check runs before anything is handed out, so no write race is involved (on Docker networks a
+    write to a peer that closed normally can still succeed, and the job was lost)."""
+    s = Stack(tmp_path, worker=False)
+    try:
+        _, r = s.ask("nobody is listening")
+        assert s.gw.next_job(0, alive=lambda: False) is None
+        assert s.gw.store.get(r["request_id"])["status"] == "queued"
+        assert s.gw.next_job(0, alive=lambda: True)["request_id"] == r["request_id"]
+        s.gw.events.append({"id": "e1"})
+        assert s.gw.take_events(0, alive=lambda: False) == []
+        assert [e["id"] for e in s.gw.take_events(0, alive=lambda: True)] == ["e1"]
     finally:
         s.close()

@@ -35,6 +35,8 @@ import hmac
 import json
 import logging
 import re
+import select
+import socket
 import threading
 import time
 import uuid
@@ -552,7 +554,7 @@ class Gateway:
                      + ("" if self.ai_enabled() else " (AI off)"))
         return " | ".join(parts)
 
-    def take_events(self, wait: float) -> list[dict]:
+    def take_events(self, wait: float, alive=None) -> list[dict]:
         deadline = self.clock() + wait
         with self.cond:
             while not self.events and not self._stop.is_set():
@@ -560,6 +562,8 @@ class Gateway:
                 if remaining <= 0:
                     break
                 self.cond.wait(min(remaining, 1.0))
+            if alive is not None and self.events and not alive():
+                return []                             # the mod went away: keep the events for its next poll
             out = list(self.events)
             self.events.clear()
             return out
@@ -590,11 +594,15 @@ class Gateway:
         return {"message": " | ".join(items) if items else "No requests yet.", "items": [dict(r) for r in rows]}
 
     # ---------- worker side ----------
-    def next_job(self, wait: float) -> dict | None:
+    def next_job(self, wait: float, alive=None) -> dict | None:
+        """Waits up to `wait` s for a job. `alive()` (from the HTTP handler) says whether the polling worker is still
+        connected: a worker stopped mid-poll closes its socket, and a job handed to it would be lost."""
         self.last_worker_seen = self.clock()
         deadline = self.clock() + wait
         with self.cond:
             while True:
+                if alive is not None and self.jobs and not alive():
+                    return None
                 while self.jobs:
                     rid = self.jobs.popleft()
                     if not self.store.mark_running(rid):
@@ -821,6 +829,17 @@ def make_handler(gw: Gateway):
                 return None
             return body
 
+        def _peer_alive(self) -> bool:
+            """False once the client has closed its end. A long-polling client sends nothing while it waits, so a
+            readable socket means it closed (recv peeks b"") or broke the protocol; never blocks."""
+            try:
+                r, _, _ = select.select([self.connection], [], [], 0)
+                if not r:
+                    return True
+                return self.connection.recv(1, socket.MSG_PEEK) != b""
+            except (OSError, ValueError):
+                return False
+
         @staticmethod
         def _wait(q: dict) -> float:
             try:
@@ -834,10 +853,10 @@ def make_handler(gw: Gateway):
             player = q.get("player_uuid", [""])[0].lower()
             if u.path == "/healthz":
                 return self._send(200, {"ok": True, "version": __version__})
-            routes = {"/v1/mod/events": ("mod", lambda: {"events": gw.take_events(self._wait(q))}),
+            routes = {"/v1/mod/events": ("mod", lambda: {"events": gw.take_events(self._wait(q), self._peer_alive)}),
                       "/v1/mod/status": ("mod", lambda: gw.status(player)),
                       "/v1/mod/history": ("mod", lambda: gw.history(player)),
-                      "/v1/worker/jobs": ("worker", lambda: {"job": gw.next_job(self._wait(q))}),
+                      "/v1/worker/jobs": ("worker", lambda: {"job": gw.next_job(self._wait(q), self._peer_alive)}),
                       "/v1/mgmt/authorized-keys": ("mgmt", lambda: {"keys": management.authorized_keys(gw)})}
             if u.path in routes:
                 api, fn = routes[u.path]
