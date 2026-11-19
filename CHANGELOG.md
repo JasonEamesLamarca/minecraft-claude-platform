@@ -5,7 +5,27 @@ and the project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor 
 
 ## [Unreleased]
 
+### Security
+- The AI worker has no route to the internet any more. Its only way out is the new `egress-proxy` service:
+  HTTPS tunnels to the host names in `EGRESS_ALLOW` (default `api.anthropic.com`), never to IP addresses or
+  private networks, each one logged.
+- The AI worker image no longer contains npm, npx or corepack (Trivy found 10 HIGH CVEs, all in npm's own
+  dependencies; Claude Code doesn't need them at runtime).
+
+### Added
+- CI: ruff lint, image builds for linux/amd64 and linux/arm64, Trivy image and configuration scans (fixable
+  HIGH/CRITICAL findings fail the build), SPDX SBOMs per image.
+- Release workflow (`v*` tags): mod jar, SBOMs, `SHA256SUMS` and build provenance attestations in a draft
+  release; a manual run is a dry run.
+- Docs: memory sizing (4G heap default, 6G for Atlantis Full) and how to change it; keep players away from an
+  example install, or run `repair` afterwards.
+
 ### Fixed
+- Mod 0.6.1: the example placer read chunks that were requested but not yet loaded, so the server thread waited
+  for them; in ungenerated terrain one wait passed 60 s and the watchdog stopped the server (Atlantis Full).
+- Mod 0.6.2: every placed water block scheduled a fluid tick. Atlantis Full queued 7.5 million in one region
+  file, lagging the server until it ran out of memory. Placed and restored pieces now drop their scheduled
+  block and fluid updates, so a build stays as designed.
 - The gateway's threads shared one SQLite connection without serializing reads; concurrent requests could fail
   with `InterfaceError` (seen when the mod downloads and reports at the same time). Every statement now runs
   under one lock (`test_concurrent_mod_calls`).

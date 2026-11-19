@@ -30,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-__version__ = "0.6.0"
+__version__ = "0.6.2"
 MAX_FILE = 64 * 1024
 FILE_COMMANDS = {("automations", "import"), ("automations", "validate"), ("auto", "import"), ("auto", "validate")}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")

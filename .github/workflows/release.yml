@@ -1,0 +1,85 @@
+name: release
+
+# A tag vX.Y.Z builds the release files from that commit and publishes them as a GitHub release (draft, for the
+# maintainer to review and publish): the Fabric mod jar, SPDX SBOMs of the mod and of every platform image,
+# SHA256SUMS, and GitHub build provenance attestations for all of them (verify with `gh attestation verify`).
+# Run it by hand (workflow_dispatch) for a dry run: everything is built and kept as a workflow artifact, nothing is
+# released or attested.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write        # create the draft release (tag runs only)
+      id-token: write        # sign the provenance attestation
+      attestations: write
+    env:
+      SYFT: anchore/syft@sha256:3c70e6d5979364cefdc22b51617a78fd264574d3bd6b4f84a351204147025e2a # v1.57.0
+      TRIVY: aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c # 0.76.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: versions agree (tag, mod, Python package, CLI)
+        run: |
+          mod=$(sed -n 's/^mod_version=//p' minecraft-mod/gradle.properties)
+          py=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/mcai/__init__.py)
+          cli=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' management-cli/mcai_cli.py)
+          echo "mod=$mod python=$py cli=$cli ref=$GITHUB_REF_NAME"
+          [[ "$mod" == "$py" && "$py" == "$cli" ]] || { echo "::error::versions differ"; exit 1; }
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$mod" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $mod"; exit 1
+          fi
+          echo "VERSION=$mod" >> "$GITHUB_ENV"
+      - name: build + unit-test the Fabric mod
+        run: scripts/build-mod.sh
+      - name: build the platform images (amd64) for their SBOMs and a last vulnerability check
+        run: |
+          docker build -f containers/gateway/Dockerfile -t mcai-gateway:release .
+          docker build -f containers/claude/Dockerfile -t mcai-ai-worker:release .
+          docker build -f containers/management/Dockerfile -t mcai-ssh-gateway:release .
+          for img in gateway ai-worker ssh-gateway; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY" image --skip-version-check \
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "mcai-$img:release"
+          done
+      - name: release files
+        run: |
+          mkdir -p out
+          cp dist/mod/mcai-fabric-*.jar out/
+          docker run --rm -v "$PWD:/repo:ro" "$SYFT" dir:/repo/minecraft-mod -o spdx-json > "out/mcai-fabric-$VERSION.spdx.json"
+          docker run --rm -v "$PWD:/repo:ro" "$SYFT" dir:/repo/src -o spdx-json > "out/mcai-python-$VERSION.spdx.json"
+          for img in gateway ai-worker ssh-gateway; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$SYFT" "docker:mcai-$img:release" \
+              -o spdx-json > "out/mcai-$img-$VERSION.spdx.json"
+          done
+          (cd out && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ env.VERSION }}
+          path: out/
+          if-no-files-found: error
+      - name: provenance attestation (tag runs only)
+        if: github.ref_type == 'tag'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "out/*"
+      - name: draft GitHub release (tag runs only)
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* --draft --verify-tag \
+            --title "Minecraft AI Platform $VERSION" \
+            --notes "See CHANGELOG.md. Verify a file with: gh attestation verify <file> --repo $GITHUB_REPOSITORY"
