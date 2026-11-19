@@ -105,7 +105,7 @@ evidence named. Unverified items say so.
 | GitHub release `examples-1.0.0` with both packs (Full is the default in the docs and automations) | ✅ | Release created 19 Nov 2026; all 98 assets downloaded back and checked against the pinned SHA-256s |
 | Atlantis Full installed on a real server and walked in game | ⏳ | Next: laptop test stack |
 | In game with a real client: walk through Lite, arrival + tour automations, repair, rollback, reinstall; 10 screenshots | ✅ | Maintainer, vanilla 1.21.1 client, 19 Nov 2026; `examples/atlantis/screenshots/game-*.jpg` |
-## Phase 7 — Hardening + full CI 🔄
+## Phase 7 — Hardening + full CI ✅
 
 | Task | Status | Evidence |
 | --- | --- | --- |
@@ -113,12 +113,13 @@ evidence named. Unverified items say so.
 | Atlantis Full on a real server (mod 0.6.1: never wait for a chunk on the server thread; 0.6.2: drop scheduled block/fluid ticks of placed and restored pieces) | ✅ | Laptop test stack, 19 Nov 2026: 255.3 M blocks in ~50 min at 20 TPS, heap peak ~3.1 of 4 GB; saved ticks per region down from 7.5 M to single digits |
 | Memory sizing guidance (4G default, 6G for Atlantis Full) and how to change it | ✅ | `docs/installation`, `docs/administration#memory` |
 | Lint: ruff (errors, undefined names, unused code) on the platform's Python | ✅ | `ruff.toml`; CI job `lint` |
-| Images built for linux/amd64 + linux/arm64 (buildx, QEMU) | 🔄 | CI job `images` |
-| Trivy: images (HIGH/CRITICAL with a fix fail the build) and Dockerfiles/compose | 🔄 | Local run clean after removing npm from the AI worker image (10 HIGH CVEs, all inside npm) |
-| SBOMs (SPDX JSON, Syft) per image as a CI artifact | 🔄 | CI artifact `sbom` |
+| Images built for linux/amd64 + linux/arm64 (buildx, QEMU) | ✅ | CI job `images` (green, 20 Nov 2026) |
+| Trivy: images (HIGH/CRITICAL with a fix fail the build) and Dockerfiles/compose | ✅ | Local run clean after removing npm from the AI worker image (10 HIGH CVEs, all inside npm) |
+| SBOMs (SPDX JSON, Syft) per image as a CI artifact | ✅ | CI artifact `sbom` |
 | AI worker egress limited to Anthropic endpoints (allowlist proxy) | ✅ | `test_egress.py` (30), `test_worker_reaches_the_internet_only_through_the_egress_proxy`; laptop: direct connection fails (no DNS), example.com refused (403), real `/ai ask` answered in 2.1 s with only `api.anthropic.com` tunnels (19 Nov 2026) |
-| Failure tests (operational): gateway restart → mod reconnects; AI worker down → question waits and is answered; worker has no direct internet and the proxy refuses other hosts; server killed during an example install → interrupted → `repair` finishes it | 🔄 | `tests/operational/first_start.sh` (CI job `operational`) |
-| Release workflow | 🔄 | `.github/workflows/release.yml`; dry run via workflow_dispatch |
+| Failure tests (operational): gateway restart → mod reconnects; AI worker down → question waits and is answered; worker has no direct internet and the proxy refuses other hosts; server killed during an example install → interrupted → `repair` finishes it | ✅ | CI job `operational` green on 957634f. Found a real bug: work handed to a long poll whose client had gone (worker stopped, mod disconnecting) was lost; fixed in the gateway (liveness check + requeue), `test_gateway_flow.py` |
+| Release workflow (mod jar, SBOMs, SHA256SUMS, draft release) | ✅ | Dry run green (workflow_dispatch, 19 Nov 2026) |
+| Build provenance attestations | ⚠️ | In the workflow, tag runs only; GitHub supports them on private repos only with Enterprise Cloud, so first exercised at the public v0.1.0 (Phase 9) |
 ## Phase 8 — Docs, diagrams, genuine screenshots ⏳
 ## Phase 9 — Publication-readiness report → owner approval → public ⏳
 
