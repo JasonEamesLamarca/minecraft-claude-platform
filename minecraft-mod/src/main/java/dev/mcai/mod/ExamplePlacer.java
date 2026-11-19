@@ -36,6 +36,7 @@ import net.minecraft.structure.StructureTemplateManager;
 import net.minecraft.util.Clearable;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.WorldSavePath;
+import net.minecraft.util.math.BlockBox;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Vec3i;
@@ -375,6 +376,18 @@ public final class ExamplePlacer {
         return world.getChunkManager().getWorldChunk(cx, cz) != null;
     }
 
+    /**
+     * Drops the block and fluid updates scheduled inside the box. Each placed water block schedules a fluid tick
+     * (onBlockAdded); Atlantis Full queued 7.5 million in one region file, which lagged the server and exhausted a
+     * 2 GB heap. A placed or restored build is meant to stay exactly as designed, as with a WorldEdit paste; the
+     * blocks update again normally when a player or a neighbour changes them.
+     */
+    static void clearScheduledTicks(ServerWorld world, int x1, int y1, int z1, int x2, int y2, int z2) {
+        BlockBox box = new BlockBox(x1, y1, z1, x2, y2, z2);
+        world.getBlockTickScheduler().clearNextTicks(box);
+        world.getFluidTickScheduler().clearNextTicks(box);
+    }
+
     static void releaseChunk(ServerWorld world, int cx, int cz) {
         ChunkPos p = new ChunkPos(cx, cz);
         world.getChunkManager().removeTicket(TICKET, p, 0, p);
@@ -526,6 +539,8 @@ public final class ExamplePlacer {
                     budget--;
                 }
             }
+            // every tick, so fluid ticks of this tick's blocks (due 5 ticks later) never run mid-piece
+            clearScheduledTicks(j.world, pc.x1(), pc.y1(), pc.z1(), pc.x2(), pc.y2(), pc.z2());
             if (j.cursor >= vol) {
                 releaseChunk(j.world, pc.x1() >> 4, pc.z1() >> 4);
                 j.piece++;
@@ -554,6 +569,9 @@ public final class ExamplePlacer {
                     // area synchronously and stall the server thread)
                     t.place(j.world, at, at, new StructurePlacementData().setUpdateNeighbors(false), j.world.getRandom(),
                             FLAGS);
+                    Vec3i sz = t.getSize();
+                    clearScheduledTicks(j.world, o[0], o[1], o[2], o[0] + sz.getX() - 1, o[1] + sz.getY() - 1,
+                            o[2] + sz.getZ() - 1);
                 }
                 mgr.unloadTemplate(sid);
                 releaseChunk(j.world, o[0] >> 4, o[2] >> 4);
