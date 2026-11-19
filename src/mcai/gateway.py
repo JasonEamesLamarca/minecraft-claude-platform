@@ -621,6 +621,24 @@ class Gateway:
                     return None
                 self.cond.wait(min(remaining, 1.0))
 
+    def return_job(self, rid: str) -> None:
+        """The worker's connection closed before it got the job (e.g. the worker stopped while polling): queue the
+        job again at the front instead of leaving it 'running' until it times out."""
+        with self.cond:
+            self.inflight.pop(rid, None)
+            if self.store.mark_queued_again(rid):
+                self.jobs.appendleft(rid)
+                self.cond.notify_all()
+                log.warning("job %s not delivered (worker connection closed); queued again", rid)
+
+    def return_events(self, events: list[dict]) -> None:
+        """The mod's connection closed before it got these events: keep them, in order, for its next poll."""
+        if events:
+            with self.cond:
+                self.events.extendleft(reversed(events))
+                self.cond.notify_all()
+            log.warning("%d event(s) not delivered (mod connection closed); kept for the next poll", len(events))
+
     def complete(self, rid: str, result: dict) -> bool:
         self.last_worker_seen = self.clock()
         row = self.store.get(rid)
@@ -824,7 +842,16 @@ def make_handler(gw: Gateway):
             if u.path in routes:
                 api, fn = routes[u.path]
                 if self._auth(api):
-                    self._send(200, fn())
+                    payload = fn()
+                    try:
+                        self._send(200, payload)
+                    except (BrokenPipeError, ConnectionResetError):
+                        # long polls hand out work; if the poller is gone, nothing may be lost
+                        if payload.get("job"):
+                            gw.return_job(payload["job"]["request_id"])
+                        elif payload.get("events"):
+                            gw.return_events(payload["events"])
+                        self.close_connection = True
                 return
             m = re.fullmatch(r"/v1/mod/examples/([0-9a-f]{8})/([a-z0-9][a-z0-9-]{0,63}\.schem)", u.path)
             if m:

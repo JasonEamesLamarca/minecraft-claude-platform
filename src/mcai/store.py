@@ -415,6 +415,13 @@ class Store:
                                   (utcnow(), rid))
             return cur.rowcount == 1
 
+    def mark_queued_again(self, rid: str) -> bool:
+        """A job handed to a worker that never received it (its connection had closed) goes back to the queue."""
+        with self._lock:
+            cur = self.db.execute("UPDATE requests SET status='queued', started_at=NULL WHERE id=? AND status='running'",
+                                  (rid,))
+            return cur.rowcount == 1
+
     def finish(self, rid: str, ok: bool, reply: str | None, error: str | None, cost_usd: float,
                input_tokens: int, output_tokens: int, provider: str, status: str | None = None) -> bool:
         """Record the AI result once. Returns False if the request was no longer running (duplicate/late/cancelled).

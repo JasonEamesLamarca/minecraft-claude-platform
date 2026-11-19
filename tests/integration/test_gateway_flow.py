@@ -251,3 +251,62 @@ def test_audit_log_has_no_request_text_by_default(stack):
     events = [a["event"] for a in stack.audit()]
     assert "request.accepted" in events and "request.done" in events
     assert all(a["ts"].endswith("Z") for a in stack.audit())
+
+
+def _abandoned_poll(url: str, path: str, token: str) -> None:
+    """Starts a long poll and then drops the connection hard (RST), like a worker or mod that is stopped while
+    waiting. The gateway's later reply to it fails."""
+    import socket
+    import struct
+    host, port = url.removeprefix("http://").split(":")
+    s = socket.create_connection((host, int(port)))
+    s.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n\r\n".encode())
+    time.sleep(0.3)                                    # the handler is now waiting inside the long poll
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    s.close()
+
+
+def test_job_for_a_vanished_worker_is_queued_again(tmp_path):
+    """Regression: a worker stopped while polling made the gateway hand the next job to a dead connection; the
+    job stayed 'running' until its timeout and the player never got an answer."""
+    s = Stack(tmp_path, worker=False)
+    try:
+        _abandoned_poll(s.url, "/v1/worker/jobs?wait=10", WORKER_TOKEN)
+        _, r = s.ask("asked while the worker was going away")
+        time.sleep(1.5)                                # the abandoned poll takes the job, fails to send it
+        assert s.gw.store.get(r["request_id"])["status"] == "queued"
+        job = s.call("GET", "/v1/worker/jobs?wait=2", token=WORKER_TOKEN)[1]["job"]
+        assert job and job["request_id"] == r["request_id"]
+    finally:
+        s.close()
+
+
+def test_events_for_a_vanished_mod_are_kept(tmp_path):
+    s = Stack(tmp_path)
+    try:
+        _abandoned_poll(s.url, "/v1/mod/events?wait=10", MOD_TOKEN)
+        _, r = s.ask("hello")                          # the mock worker answers; the answer is an event for the mod
+        time.sleep(1.5)
+        ev = s.events_until(1)
+        assert any(e.get("request_id") == r["request_id"] for e in ev), ev
+    finally:
+        s.close()
+
+
+def test_return_job_and_events_keep_order(tmp_path):
+    s = Stack(tmp_path, worker=False)
+    try:
+        _, a = s.ask("first")
+        _, b = s.ask("second", player=ALEX, name="Alex")
+        job = s.gw.next_job(0)
+        assert job["request_id"] == a["request_id"]
+        s.gw.return_job(job["request_id"])
+        assert s.gw.next_job(0)["request_id"] == a["request_id"]      # back at the front
+        assert s.gw.next_job(0)["request_id"] == b["request_id"]
+        s.gw.return_job("ffffff")                                      # unknown id: no effect
+        s.gw.events.clear()
+        s.gw.events.append({"id": "c"})
+        s.gw.return_events([{"id": "a"}, {"id": "b"}])
+        assert [e["id"] for e in s.gw.take_events(0)] == ["a", "b", "c"]
+    finally:
+        s.close()

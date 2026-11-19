@@ -21,6 +21,9 @@ and the project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor 
   example install, or run `repair` afterwards.
 
 ### Fixed
+- Work handed out on a long poll was lost if the poller had just gone away: a job sent to an AI worker that was
+  stopping stayed "running" until its timeout (the player never got an answer), and events sent to a mod that
+  was disconnecting were dropped. The gateway now queues such a job again and keeps such events for the next poll.
 - Mod 0.6.1: the example placer read chunks that were requested but not yet loaded, so the server thread waited
   for them; in ungenerated terrain one wait passed 60 s and the watchdog stopped the server (Atlantis Full).
 - Mod 0.6.2: every placed water block scheduled a fluid tick. Atlantis Full queued 7.5 million in one region

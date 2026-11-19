@@ -17,7 +17,9 @@ cleanup() {
   local rc=$?
   if (( rc != 0 )); then
     echo "### FAILED (exit $rc) - recent service logs:"
-    (cd "$WORK" && docker compose ps -a && docker compose logs --no-color --tail 25 gateway ai-worker ssh-gateway minecraft) || true
+    (cd "$WORK" && docker compose ps -a && docker compose logs --no-color --tail 25 gateway ai-worker ssh-gateway egress-proxy) || true
+    # the server log without RCON connection noise, which otherwise fills the tail
+    (cd "$WORK" && docker compose logs --no-color minecraft | grep -vE 'RCON (Listener|Client)|kex_exchange' | tail -60) || true
   fi
   (cd "$WORK" && docker compose down --timeout 60 >/dev/null 2>&1) || true
 }
@@ -78,7 +80,8 @@ read -r x1 y1 z1 _ y2 _ < <(echo "$prev" | grep -oE 'at -?[0-9]+ -?[0-9]+ -?[0-9
 is_block() { R "execute if block $1 $2 $3 $4 run seed" | grep -q Seed; }
 if is_block "$x1" "$y1" "$z1" minecraft:stone_bricks; then echo "pillar present before approval"; exit 1; fi
 R "ai approve $rid"
-for _ in $(seq 1 20); do is_block "$x1" "$y1" "$z1" minecraft:stone_bricks && break; sleep 1; done
+for _ in $(seq 1 60); do is_block "$x1" "$y1" "$z1" minecraft:stone_bricks && break; sleep 1; done
+is_block "$x1" "$y1" "$z1" minecraft:stone_bricks || { echo "approved build not placed within 60 s"; exit 1; }
 is_block "$x1" "$y1" "$z1" minecraft:stone_bricks && is_block "$((x1 + 1))" "$y2" "$((z1 + 1))" minecraft:torch
 is_block "$((x1 + 1))" "$((y1 + 1))" "$((z1 + 1))" minecraft:air          # hollow inside
 test -f "data/minecraft/world/generated/mcai/structures/undo/$rid.nbt"
