@@ -233,6 +233,7 @@ pending requests, today's AI spend and whether the AI worker is online. `/ai hel
 | `AI_PLAYER_REQUESTS_PER_MINUTE` | `3` | Per-player rate limit |
 | `AI_MAX_PENDING_PER_PLAYER` | `1` | A player waits for one answer before asking again |
 | `AI_MODEL` | (Claude Code default) | Model alias such as `sonnet` or `haiku`, or a full model name |
+| `EGRESS_ALLOW` | `api.anthropic.com` | The only host names the AI worker can reach (HTTPS, through `egress-proxy`). `docker compose logs egress-proxy` shows every connection and refusal |
 | `MCAI_COMMAND` | `ai` | Rename the command if another mod already uses `/ai` |
 | `MCAI_ASK_PERMISSION_LEVEL` | `0` | Raise it to `2`, for example, to limit `/ai` to operators |
 

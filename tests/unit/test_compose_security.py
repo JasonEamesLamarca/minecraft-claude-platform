@@ -138,7 +138,20 @@ def test_worker_has_no_volumes_and_gateway_no_internet(config):
     assert not [v for v in worker.get("volumes", []) if v.get("type") != "tmpfs"], "AI worker must not mount host data"
     assert worker.get("read_only") is True
     assert set(config["services"]["gateway"]["networks"]) == {"internal"}
-    assert set(worker["networks"]) == {"internal", "ai-egress"}
+    assert set(worker["networks"]) == {"internal", "ai-proxy"}
+
+
+def test_worker_reaches_the_internet_only_through_the_egress_proxy(config):
+    nets, svcs = config["networks"], config["services"]
+    assert nets["ai-proxy"].get("internal") is True and nets["internal"].get("internal") is True
+    assert svcs["ai-worker"]["environment"]["HTTPS_PROXY"] == "http://egress-proxy:3128"
+    proxy = svcs["egress-proxy"]
+    assert set(proxy["networks"]) == {"ai-proxy", "ai-egress"}
+    assert proxy["environment"]["EGRESS_ALLOW"] == "api.anthropic.com"
+    assert not proxy.get("secrets") and not [v for v in proxy.get("volumes", []) if v.get("type") != "tmpfs"]
+    assert not proxy.get("ports"), "the proxy must not be published"
+    # nothing else shares a network with the internet-facing side of the proxy
+    assert [n for n, s in svcs.items() if "ai-egress" in s.get("networks", {})] == ["egress-proxy"]
 
 
 def test_worker_token_and_mod_token_separated(config):

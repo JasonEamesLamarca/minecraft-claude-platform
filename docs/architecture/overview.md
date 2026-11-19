@@ -8,7 +8,8 @@
 | --- | --- | --- | --- |
 | `minecraft` | itzg/minecraft-server (Fabric) + the `mcai` server mod: `/ai` commands, join/leave + health reports, previews, block placement, undo snapshots, example packs (verified `.schem` sections placed chunk by chunk), game events for automations (areas, advancements, `/ai trigger`, world time). **Implemented** | Untrusted input (players) | gateway (token-authenticated API) |
 | `gateway` | Identities (player UUIDs, accounts), roles, request routing, plan validation, approvals, rate and budget limits, management API, automation engine, example pack store and installer, audit log, SQLite state. **The only component that decides.** **Implemented** | Trusted core | minecraft (mod API; RCON on the internal network for management commands), ai-worker, ssh-gateway |
-| `ai-worker` | Runs Claude Code per job with no tools (questions) or two MCP proposal tools (builds). Holds the AI credential. **Implemented** | Semi-trusted (model output is untrusted) | gateway; internet egress to the AI provider |
+| `ai-worker` | Runs Claude Code per job with no tools (questions) or two MCP proposal tools (builds). Holds the AI credential. **Implemented** | Semi-trusted (model output is untrusted) | gateway; the AI provider only, through `egress-proxy` |
+| `egress-proxy` | HTTPS tunnels (CONNECT) to the host names in `EGRESS_ALLOW` only, never to IP addresses or private networks; logs each one. Standard-library Python (`src/mcai/egress.py`). **Implemented** | Edge | ai-worker; the internet |
 | `ssh-gateway` | OpenSSH (unprivileged, keys only), `ForceCommand` → dispatcher; no shell, PTY, forwarding or files. **Implemented** | Edge | gateway management API |
 | `backup` | itzg/mc-backup: scheduled world backups. **Implemented** | Data | minecraft (RCON, read-only data) |
 
@@ -74,7 +75,8 @@ sequenceDiagram
 
 - `internal` (Docker bridge, `internal: true`) connects minecraft ↔ gateway ↔ ai-worker ↔ ssh-gateway ↔ backup.
   RCON exists only here.
-- `ai-egress` connects ai-worker ↔ internet (AI provider) and ai-worker ↔ gateway.
+- `ai-proxy` (`internal: true`) connects ai-worker ↔ egress-proxy only.
+- `ai-egress` connects egress-proxy ↔ internet. No other service is on it.
 - `edge` carries the published ports: the Minecraft game port and the SSH gateway port (127.0.0.1 unless the
   owner chooses otherwise). Nothing else is published.
 

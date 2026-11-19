@@ -146,7 +146,7 @@ class ClaudeCodeProvider(Provider):
         return cmd
 
     def environment(self) -> dict:
-        keep = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "CLAUDE_CONFIG_DIR", "TMPDIR")
+        keep = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "CLAUDE_CONFIG_DIR", "TMPDIR", "HTTPS_PROXY", "NO_PROXY")
         env = {k: v for k, v in os.environ.items() if k in keep}
         env.update(DISABLE_AUTOUPDATER="1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")
         if self.auth_method == "api-key":

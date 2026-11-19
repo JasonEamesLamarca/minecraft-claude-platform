@@ -217,8 +217,13 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
+      egress-proxy:
+        condition: service_healthy
     environment:
       GATEWAY_URL: http://gateway:8080
+      # No route to the internet: Claude Code reaches the AI provider only through the allowlisting proxy.
+      HTTPS_PROXY: http://egress-proxy:3128
+      NO_PROXY: gateway,localhost,127.0.0.1
       WORKER_TOKEN_FILE: /run/secrets/worker_token
       AI_PROVIDER: "${AI_PROVIDER:-claude}"
       AI_AUTH_METHOD: "${AI_AUTH_METHOD:-none}"
@@ -236,10 +241,39 @@ services:
       - ai_credential
     networks:
       - internal
-      - ai-egress
+      - ai-proxy
     mem_limit: "${AI_WORKER_MEM_LIMIT:-1g}"
     cpus: "1.0"
     pids_limit: 256
+
+  # The AI worker's only way out: HTTPS tunnels to the host names in EGRESS_ALLOW (default: the Anthropic API),
+  # never to IP addresses or private networks. Standard-library Python from the gateway image (src/mcai/egress.py).
+  egress-proxy:
+    <<: *hardening
+    init: true
+    build:
+      context: .
+      dockerfile: containers/gateway/Dockerfile   # same code and base image as the gateway (layers are shared)
+    image: mcai-egress-proxy:${MCAI_VERSION:-dev}
+    entrypoint: ["python3", "-m", "mcai.egress"]
+    user: "${PUID}:${PGID}"
+    restart: unless-stopped
+    read_only: true
+    environment:
+      EGRESS_ALLOW: "${EGRESS_ALLOW:-api.anthropic.com}"
+      EGRESS_MAX_TUNNELS: "32"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 3128), 2).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - ai-proxy
+      - ai-egress
+    mem_limit: 64m
+    cpus: "0.5"
+    pids_limit: 32
 
   # SSH gateway for administration: keys only, forced command, no shell/PTY/forwarding. Talks to the gateway's
   # management API; holds no Docker socket, world data or AI credential.
@@ -286,8 +320,11 @@ networks:
   # Service-to-service traffic only; no route to the outside world.
   internal:
     internal: true
-  # Outbound internet for the AI worker only (AI provider API).
+  # Outbound internet for the egress proxy only.
   ai-egress: {}
+  # AI worker <-> egress proxy; no route to the outside world.
+  ai-proxy:
+    internal: true
 
 secrets:
   rcon_password:

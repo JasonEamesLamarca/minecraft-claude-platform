@@ -71,8 +71,10 @@ actions).
 | T14 | **Implemented:** audit records store request length + hash, not text (`AUDIT_LOG_TEXT=false`). Structured JSON logs carry no secrets | `test_audit_log_has_no_request_text_by_default` |
 
 New residual risks (Phase 2):
-- The AI worker has general outbound internet access, not only Anthropic's API. An allowlisting egress proxy is
-  planned for Phase 7.
+- ~~The AI worker has general outbound internet access~~ Closed in Phase 7: the worker has no route to the
+  internet. Its only way out is `egress-proxy`, which tunnels HTTPS to host names in `EGRESS_ALLOW` (default
+  `api.anthropic.com`) and refuses IP addresses, other ports, plain HTTP and names that resolve to private
+  addresses. Every tunnel and refusal is logged (`docker compose logs egress-proxy`).
 - Prompt injection can still change *what text* the model answers, within the length limit. It can't make the
   platform do anything else.
 - Subscription-token use carries terms-of-service risk for the server owner (ADR-0003).

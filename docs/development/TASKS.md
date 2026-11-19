@@ -109,20 +109,20 @@ evidence named. Unverified items say so.
 
 | Task | Status | Evidence |
 | --- | --- | --- |
+| Atlantis Full: stray water from players nearby during the install removed by `repair` (3,342 blocks); docs tell admins to keep players away or repair afterwards | ✅ | Region scan: 677 flowing-water blocks under the dome before, 0 after |
 | Atlantis Full on a real server (mod 0.6.1: never wait for a chunk on the server thread; 0.6.2: drop scheduled block/fluid ticks of placed and restored pieces) | ✅ | Laptop test stack, 19 Nov 2026: 255.3 M blocks in ~50 min at 20 TPS, heap peak ~3.1 of 4 GB; saved ticks per region down from 7.5 M to single digits |
 | Memory sizing guidance (4G default, 6G for Atlantis Full) and how to change it | ✅ | `docs/installation`, `docs/administration#memory` |
 | Lint: ruff (errors, undefined names, unused code) on the platform's Python | ✅ | `ruff.toml`; CI job `lint` |
 | Images built for linux/amd64 + linux/arm64 (buildx, QEMU) | 🔄 | CI job `images` |
 | Trivy: images (HIGH/CRITICAL with a fix fail the build) and Dockerfiles/compose | 🔄 | Local run clean after removing npm from the AI worker image (10 HIGH CVEs, all inside npm) |
 | SBOMs (SPDX JSON, Syft) per image as a CI artifact | 🔄 | CI artifact `sbom` |
-| AI worker egress limited to Anthropic endpoints (allowlist proxy) | ⏳ | |
+| AI worker egress limited to Anthropic endpoints (allowlist proxy) | ✅ | `test_egress.py` (30), `test_worker_reaches_the_internet_only_through_the_egress_proxy`; laptop: direct connection fails (no DNS), example.com refused (403), real `/ai ask` answered in 2.1 s with only `api.anthropic.com` tunnels (19 Nov 2026) |
 | Release workflow: mod jar, checksums, SBOMs, build provenance attestations | ⏳ | |
 | Failure tests: gateway / worker / server restarts during jobs | ⏳ | |
 ## Phase 8 — Docs, diagrams, genuine screenshots ⏳
 ## Phase 9 — Publication-readiness report → owner approval → public ⏳
 
 ## Risks / open issues
-- AI worker egress isn't domain-restricted yet (planned: allowlist proxy, Phase 7).
 - Subscription-token use: terms-of-service risk accepted by the owner (ADR-0003).
 - Real-client acceptance steps and screenshots need the maintainer at a Minecraft client.
 - macOS / Windows Docker Desktop and native ARM64 hosts can't be verified locally. CI covers ARM64 builds only.
