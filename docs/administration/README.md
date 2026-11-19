@@ -192,6 +192,34 @@ settings changed. After rebuilding the mod (`scripts/build-mod.sh`), re-run `scr
 checksum is recorded and `up` restarts the server with it. To add mods, append `project:versionId` entries from Modrinth to `MC_MODS`. Pin exact
 versions so updates stay deliberate.
 
+### Memory
+
+The server's Java heap is `MC_MEMORY` in `.env`, and the container's hard limit is `MC_MEM_LIMIT`. Keep the limit
+at about 1.5 times the heap plus 1 GB: Java needs room outside the heap, and a container that hits its limit is
+killed, not slowed down. **4G is the default and the recommended minimum**. Use 6G before installing Atlantis Full or
+for 5-10 players (the [installation guide](../installation/README.md#supported-hosts) has the full table).
+
+To change it, for example to 6 GB:
+
+1. Check the host has the RAM: the new heap plus about 2 GB for the other containers and the system
+   (`free -h` on Linux).
+2. Edit `.env`:
+   ```bash
+   MC_MEMORY=6G
+   MC_MEM_LIMIT=10g
+   ```
+   Or re-run `scripts/setup.sh` and enter `6G` when it asks for the heap. It sets the limit for you.
+3. Apply it. This restarts the Minecraft server, so tell players first:
+   ```bash
+   docker compose up -d minecraft
+   ```
+4. Check it: `mcai status` shows the heap in use and its maximum. `docker stats mcai-minecraft-1` shows the
+   container's use against the limit.
+
+Signs the heap is too small: the log repeats `Can't keep up! Is the server overloaded?`, `mcai status` shows the
+heap above 90% most of the time, or the server restarts with `java.lang.OutOfMemoryError` in
+`docker compose logs minecraft`.
+
 ## AI assistant (`/ai`)
 
 Players type `/ai ask <question>`. The answer appears in their chat a few seconds later. `/ai status` shows their
@@ -424,7 +452,7 @@ mcai examples status <install>                       # progress; when done: plac
 - **Where.** `--at X Y Z` is where the pack's *anchor* goes: the city centre at floor level. People walk 5 blocks
   higher. With Y = -56 (the recommended value) Atlantis fills y -64 to 62, so its glass roof sits at sea level
   in an ocean. Lite is sealed with glass on all sides, so it also works on land. Full needs a deep ocean of about
-  1,600 x 1,600 blocks; make a backup before installing it.
+  1,600 x 1,600 blocks; make a backup before installing it, and give the server a 6 GB heap (see [Memory](#memory)).
 - **Checks before anything changes.** The pack must fit in the world's height, may not overlap a protected area
   (`protected-areas.json`, as for AI builds) or another install, and may not exceed `EXAMPLES_MAX_INSTALL_BLOCKS`.
 - **What happens.** The server works through the pack chunk by chunk. Before it changes a chunk, it saves what

@@ -124,7 +124,7 @@ env_set MC_OWNER "$OWNER"
 PORT="${PORT:-$(ask "Game port" "$(env_get MC_PORT)")}"; PORT="${PORT:-25565}"
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1024 || PORT > 65535 )); then die "Port must be a number between 1024 and 65535."; fi
 env_set MC_PORT "$PORT"
-MEMORY="${MEMORY:-$(ask "Java heap for the server (e.g. 2G, 4G, 8G)" "$(env_get MC_MEMORY)")}"; MEMORY="${MEMORY:-4G}"
+MEMORY="${MEMORY:-$(ask "Java heap for the server (4G recommended, 6G for Atlantis Full or 5-10 players)" "$(env_get MC_MEMORY)")}"; MEMORY="${MEMORY:-4G}"
 [[ "$MEMORY" =~ ^([1-9][0-9]?)G$ ]] || die "Memory must look like 4G (whole gigabytes, 1G-99G)."
 heap_g="${BASH_REMATCH[1]}"
 env_set MC_MEMORY "$MEMORY"

@@ -15,8 +15,20 @@
 
 Both images used (`itzg/minecraft-server`, `itzg/mc-backup`) are published for amd64 and arm64.
 
-**Resources:** 2 CPU cores and 4 GB of free RAM are the minimum for a small server (`--memory 2G`). 4 GB heap or
-more is recommended for several players. You'll also want 5 GB of free disk space, plus space for backups.
+**Resources:** 2 CPU cores, 5 GB of free disk space plus space for backups, and enough RAM for the Java heap you
+choose plus about 2 GB. **Use a heap of at least 4 GB** (the default, `--memory 4G`). 2 GB starts and is fine for
+one or two players exploring, but it is too small for the example builds: installing Atlantis Full on a 2 GB heap
+ran out of memory in testing.
+
+| Java heap (`MC_MEMORY`) | Good for | Container limit (`MC_MEM_LIMIT`) | Free RAM on the host |
+| --- | --- | --- | --- |
+| 2G | testing only: 1-2 players, no example builds | 4g | 4 GB |
+| **4G (default, recommended)** | up to about 5 players, AI builds, Atlantis Lite | 7g | 6-8 GB |
+| 6G | Atlantis Full, 5-10 players, a larger view distance | 10g | 8-12 GB |
+| 8G | 10+ players or many extra mods | 13g | 12-16 GB |
+
+A bigger heap than you need doesn't make the server faster: the garbage collector just has more to scan. To change
+it later, see [Memory](../administration/README.md#memory) in the admin guide.
 
 ## 1. Install Docker
 
