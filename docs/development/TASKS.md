@@ -117,8 +117,8 @@ evidence named. Unverified items say so.
 | Trivy: images (HIGH/CRITICAL with a fix fail the build) and Dockerfiles/compose | 🔄 | Local run clean after removing npm from the AI worker image (10 HIGH CVEs, all inside npm) |
 | SBOMs (SPDX JSON, Syft) per image as a CI artifact | 🔄 | CI artifact `sbom` |
 | AI worker egress limited to Anthropic endpoints (allowlist proxy) | ✅ | `test_egress.py` (30), `test_worker_reaches_the_internet_only_through_the_egress_proxy`; laptop: direct connection fails (no DNS), example.com refused (403), real `/ai ask` answered in 2.1 s with only `api.anthropic.com` tunnels (19 Nov 2026) |
-| Release workflow: mod jar, checksums, SBOMs, build provenance attestations | ⏳ | |
-| Failure tests: gateway / worker / server restarts during jobs | ⏳ | |
+| Failure tests (operational): gateway restart → mod reconnects; AI worker down → question waits and is answered; worker has no direct internet and the proxy refuses other hosts; server killed during an example install → interrupted → `repair` finishes it | 🔄 | `tests/operational/first_start.sh` (CI job `operational`) |
+| Release workflow | 🔄 | `.github/workflows/release.yml`; dry run via workflow_dispatch |
 ## Phase 8 — Docs, diagrams, genuine screenshots ⏳
 ## Phase 9 — Publication-readiness report → owner approval → public ⏳
 

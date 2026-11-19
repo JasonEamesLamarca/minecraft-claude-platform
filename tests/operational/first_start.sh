@@ -224,10 +224,10 @@ bindings ssh-gateway | grep -q "\"HostIp\":\"127.0.0.1\",\"HostPort\":\"$SSH_POR
   || { echo "ssh-gateway binding: $(bindings ssh-gateway)"; exit 1; }
 smounts="$(docker inspect "$(docker compose ps -q ssh-gateway)" --format '{{range .Mounts}}{{.Destination}};{{end}}')"
 [[ "$smounts" == *"/data;"* && "$smounts" != *docker.sock* && "$smounts" != *ai_credential* ]] || { echo "ssh-gateway mounts: $smounts"; exit 1; }
-for svc in gateway ai-worker backup; do
+for svc in gateway ai-worker egress-proxy backup; do
   [[ "$(bindings "$svc")" == "{}" ]] || { echo "$svc publishes ports: $(bindings "$svc")"; exit 1; }
 done
-echo "ok: gateway, ai-worker and backup publish nothing"
+echo "ok: gateway, ai-worker, egress-proxy and backup publish nothing"
 # Compose implements file secrets as read-only bind mounts; anything else (world data, docker.sock...) fails.
 mounts="$(docker inspect "$(docker compose ps -q ai-worker)" --format '{{range .Mounts}}{{.Destination}} rw={{.RW}};{{end}}')"
 [[ "$mounts" == "/run/secrets/worker_token rw=false;/run/secrets/ai_credential rw=false;" \
@@ -251,6 +251,63 @@ docker compose exec -T minecraft sh -c 'kill -9 $(pgrep java)' || true
 sleep 10
 scripts/wait-healthy.sh minecraft 600
 has_marker
+
+step "failure: the gateway restarts; the mod reconnects and /ai ask works again"
+mod_online() { for _ in $(seq 1 60); do M status 2>/dev/null | grep >/dev/null 'Server: online' && return 0; sleep 2; done; return 1; }
+ask_and_wait() {   # $1 = question; waits up to $2 seconds for the mock reply in the server log
+  R "ai ask $1" >/dev/null
+  for _ in $(seq 1 "${2:-30}"); do docker compose logs --since 5m minecraft | grep -q "You asked: $1" && return 0; sleep 1; done
+  return 1
+}
+docker compose restart gateway >/dev/null
+scripts/wait-healthy.sh gateway 120
+mod_online || { echo "mod did not reconnect after the gateway restart"; exit 1; }
+ask_and_wait "after gateway restart" || { echo "no answer after the gateway restart"; exit 1; }
+echo "ok: mod reconnected, question answered"
+
+step "failure: the AI worker is down; a question waits and is answered when it is back"
+docker compose stop ai-worker >/dev/null
+R "ai ask while the worker is down" >/dev/null
+sleep 5
+if docker compose logs --since 1m minecraft | grep -q "You asked: while the worker is down"; then
+  echo "answered without a worker?"; exit 1; fi
+docker compose start ai-worker >/dev/null
+for _ in $(seq 1 60); do docker compose logs --since 3m minecraft | grep -q "You asked: while the worker is down" && break; sleep 1; done
+docker compose logs --since 3m minecraft | grep -q "You asked: while the worker is down" \
+  || { echo "queued question not answered after the worker came back"; exit 1; }
+echo "ok: queued question answered after the worker restarted"
+
+step "egress: the AI worker has no direct internet; the proxy refuses hosts that aren't allowlisted"
+docker compose exec -T ai-worker python3 - <<'PY'
+import urllib.request
+direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+try:
+    direct.open("https://api.anthropic.com", timeout=8); raise SystemExit("direct internet access from the AI worker")
+except OSError:
+    pass
+try:
+    urllib.request.urlopen("https://example.com", timeout=8); raise SystemExit("proxy allowed example.com")
+except OSError as e:
+    assert "403" in str(e), e
+print("ok: no direct route; example.com refused by the proxy")
+PY
+docker compose logs egress-proxy | grep -q '"event":"denied".*example.com'
+
+step "failure: the server dies during an example install; the install is interrupted and repair finishes it"
+BX=3000
+M examples install atlantis-lite --at $BX $AY $AZ --yes | grep >/dev/null 'Started install'
+iid2="$(M --json examples installs | python3 -c 'import json,sys; print([r["id"] for r in json.load(sys.stdin)["data"] if json.loads(r["anchor"])[0] == '$BX'][0])')"
+for _ in $(seq 1 60); do M examples status "$iid2" | grep -E >/dev/null 'Progress: [1-9]' && break; sleep 2; done
+docker compose exec -T minecraft sh -c 'kill -9 $(pgrep java)' || true
+sleep 10
+scripts/wait-healthy.sh minecraft 600
+mod_online
+for _ in $(seq 1 60); do M examples status "$iid2" | grep >/dev/null ", interrupted" && break; sleep 2; done
+M examples status "$iid2" | grep >/dev/null ", interrupted" || { M examples status "$iid2"; echo "install not marked interrupted"; exit 1; }
+M examples repair "$iid2" | grep >/dev/null 'Repairing'
+for _ in $(seq 1 180); do M examples status "$iid2" | grep >/dev/null "atlantis-lite 1.0.0, placed" && break; sleep 5; done
+M examples status "$iid2" | grep >/dev/null "atlantis-lite 1.0.0, placed" || { M examples status "$iid2"; echo "repair did not finish"; exit 1; }
+echo "ok: interrupted install finished by repair"
 
 step "doctor"
 scripts/doctor.sh
