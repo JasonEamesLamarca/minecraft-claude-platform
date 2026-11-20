@@ -222,11 +222,14 @@ fi
 
 # ---------- 8. server mod + validate ----------
 mkdir -p "$ROOT/data/minecraft/logs" "$ROOT/data/gateway" "$ROOT/data/ssh-gateway" "$ROOT/backups" "$ROOT/dist/mod"
-if ! compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null; then
+# Build the mod when dist/mod has no jar for the version in the source (first install, or after an upgrade).
+mod_version="$(sed -n 's/^mod_version=//p' "$ROOT/minecraft-mod/gradle.properties")"
+if ! compgen -G "$ROOT/dist/mod/mcai-fabric-$mod_version+*.jar" >/dev/null; then
   if [[ "${MCAI_SKIP_MOD_BUILD:-}" == 1 ]]; then
-    warn "No mod jar in dist/mod and MCAI_SKIP_MOD_BUILD=1: /ai commands will be missing."
+    compgen -G "$ROOT/dist/mod/mcai-fabric-*.jar" >/dev/null \
+      || warn "No mod jar in dist/mod and MCAI_SKIP_MOD_BUILD=1: /ai commands will be missing."
   else
-    info "Building the server mod (first time only; downloads Gradle dependencies, a few minutes)..."
+    info "Building the server mod $mod_version (downloads Gradle dependencies the first time; a few minutes)..."
     buildlog="$(mktemp)"
     if ! "$ROOT/scripts/build-mod.sh" >"$buildlog" 2>&1; then
       tail -n 40 "$buildlog" >&2; rm -f "$buildlog"
