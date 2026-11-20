@@ -18,7 +18,7 @@ Recorded on 20 November 2026.
 | Clean-machine install from the installation guide (`tests/operational/clean_machine.sh`) | Fresh Ubuntu 24.04 host | **Pass** (27 min, commit `35cf5ad`) |
 | Release workflow, dry run | GitHub Actions (`workflow_dispatch`) | **Pass** (attestation step only runs on tags) |
 | Mermaid diagrams render (11 diagrams, mermaid-cli 11.4.2) | Laptop | **Pass** |
-| In game with a real Minecraft client: join, `/ai ask` with real Claude, `/ai build` → approve → undo, Atlantis Lite and Full install, automations | Test server on the laptop | **Pass** (19-20 Nov; [screenshots](../../examples/atlantis/README.md#in-game)) |
+| In game with a real Minecraft client: join, `/ai ask` with real Claude, `/ai build` → approve → undo, Atlantis Lite and Full install, automations | Test server on the laptop | **Pass** (19-20 Nov; [screenshots](#screenshots)) |
 
 CI: run [44699809339](https://github.com/JasonEamesLamarca/minecraft-claude-platform/actions/runs/44699809339)
 on commit `abd8bde`: all 10 jobs green. Release dry run:
@@ -66,6 +66,21 @@ owner name without a Minecraft account made the server restart in a loop. The wi
 its version changes, and checks the name. In this run Mojang's API answered the name check with HTTP 429
 (rate-limited), so the wizard warned and went on, as designed. The check now asks Playerdb first, the service the
 server itself uses, and was verified by hand against a real and a made-up name.
+
+## Screenshots
+
+Genuine, from the test server on the developer laptop with a Java Edition 1.21.1 client, on 19 and 20 November
+2026. Converted from the client's PNGs with the metadata removed. Player names, UUIDs and the SSH key fingerprint
+are covered with grey boxes in the terminal shots; nothing else is edited.
+
+| What | File |
+| --- | --- |
+| `/ai ask` answered by Claude | [game-ai-ask.jpg](../images/game-ai-ask.jpg) |
+| `/ai build` preview with the particle outline | [game-ai-build-preview.jpg](../images/game-ai-build-preview.jpg) |
+| `/ai approve`: build finished, 254 blocks | [game-ai-build-finished.jpg](../images/game-ai-build-finished.jpg), [game-ai-build-result.jpg](../images/game-ai-build-result.jpg) |
+| `/ai status` | [game-ai-status.jpg](../images/game-ai-status.jpg) |
+| `mcai tui`, `mcai status`, `mcai audit show` | [terminal-tui.png](../images/terminal-tui.png), [terminal-status.png](../images/terminal-status.png), [terminal-audit.png](../images/terminal-audit.png) |
+| Atlantis in game (10 shots) | [examples/atlantis](../../examples/atlantis/README.md#in-game) |
 
 ## Versions
 

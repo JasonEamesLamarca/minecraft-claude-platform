@@ -76,6 +76,10 @@ sequenceDiagram
 | Example builds (Atlantis): catalog, packs, installs | `mcai examples list`, `info <pack>`, `installs`, `status <install>` | auditor, operator+ |
 | Example builds: download, install, repair, roll back | `mcai examples download <pack>`, `install <pack> --at X Y Z`, `repair`/`rollback <install>` | admin+ |
 
+![mcai status: server online at 20.0 TPS, heap, players online, AI budget used today, backups](../images/terminal-status.png)
+
+*`mcai status` (player name redacted).*
+
 Add `--json` before the command for machine-readable output, for example `mcai --json status`.
 
 **Full-screen console:** run `mcai tui --install` once, then `mcai tui`. It has a live log with a command line, the
@@ -84,6 +88,10 @@ approve, run, history). It is the successor of the earlier
 `mc-admin` console. Unlike that console, it never gets a shell on the host: every action is an `mcai` command
 checked against your role. Interactive Claude Code sessions on the server are not offered over SSH, because
 that would need a terminal (PTY) inside the platform.
+
+![mcai tui: a status bar, the server log with a command line, and panels for players, AI requests waiting and automations](../images/terminal-tui.png)
+
+*`mcai tui` on the test server. The player's name and UUID are redacted.*
 
 ### Roles
 
@@ -129,6 +137,12 @@ mode 600):
 
 Each record contains a hash of the previous one, so `mcai audit verify` notices edits and deletions. Files older
 than `AUDIT_RETENTION_DAYS` (default 365) are deleted. Back up `data/gateway/` if you need to keep them longer.
+
+`mcai audit show --since 1d` prints them:
+
+![mcai audit show: a player leaving, an SSH login by the owner, an example repair started, and the management command behind it](../images/terminal-audit.png)
+
+*Player name, UUID and SSH key fingerprint redacted.*
 
 ## Server console
 
@@ -247,6 +261,10 @@ heap above 90% most of the time, or the server restarts with `java.lang.OutOfMem
 Players type `/ai ask <question>`. The answer appears in their chat a few seconds later. `/ai status` shows their
 pending requests, today's AI spend and whether the AI worker is online. `/ai help` lists the commands.
 
+| `/ai ask how do I make a torch?` | `/ai status` |
+| --- | --- |
+| ![Claude's answer in chat: one coal above one stick gives four torches, and coal ore is common at the player's depth](../images/game-ai-ask.jpg) | ![/ai status: no requests in progress, AI budget today $0.06 of $2.00, AI worker online](../images/game-ai-status.jpg) |
+
 | Setting (`.env`) | Default | Meaning |
 | --- | --- | --- |
 | `AI_PROVIDER` | `claude` | `mock` gives canned answers, which is useful for testing without a credential or cost |
@@ -282,6 +300,13 @@ approves them (below). It has no other tools: no commands, no files, no web acce
 4. `/ai undo` (or `/ai undo <id>`) puts the area back exactly as it was before the build.
 
 `/ai history` lists your last 5 requests with their ids and states.
+
+| 2. The preview | 3. After `/ai approve 1b77dd` |
+| --- | --- |
+| ![Proposal 1b77dd: Small Stone Lighthouse, 5×15×5, 254 blocks with materials; particles outline the area in the sky](../images/game-ai-build-preview.jpg) | ![The lighthouse built, with chat showing "Build 1b77dd finished: 254 blocks placed. Not happy? /ai undo 1b77dd"](../images/game-ai-build-finished.jpg) |
+
+*Test server, real Claude. Earlier in that chat an older proposal (e95af2) was still waiting, so the new request
+was refused until it was cancelled: one pending request per player.*
 
 **Who can build:** players with the `builder` role or higher: `mcai players role Alex builder`. Builders approve,
 cancel and undo their own builds. Operators and above can do that for anyone's builds, in game or with

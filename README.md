@@ -24,6 +24,15 @@ chat, and you stay in control of what the AI may change.
 - **[Atlantis](examples/atlantis/README.md):** an original underwater city, 1,200 blocks across, under a glass dome.
   `mcai examples` downloads it, checks it and installs it, and can roll it back.
 
+### In game
+
+| `/ai ask` | `/ai build`: the preview | Approved and built |
+| --- | --- | --- |
+| ![A player asks how to make a torch and Claude's answer appears in chat, mentioning the player's depth](docs/images/game-ai-ask.jpg) | ![The proposal in chat with size, block count and materials; white particles outline the area](docs/images/game-ai-build-preview.jpg) | ![The finished stone lighthouse with a lantern on top, built after /ai approve](docs/images/game-ai-build-result.jpg) |
+
+*Genuine screenshots from the test server, Minecraft 1.21.1, real Claude. The build was a one-line request:
+"a small stone lighthouse with a lantern on top".*
+
 **Safe by design:** Claude never gets a shell, files, server commands or operator rights. It can only *propose*
 actions from a fixed list. The platform checks every proposal against the player's role, the area and a block
 budget, and nothing is built without approval. The AI can reach only Anthropic's API, and spending has daily
