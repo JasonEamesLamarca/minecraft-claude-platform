@@ -121,6 +121,13 @@ evidence named. Unverified items say so.
 | Release workflow (mod jar, SBOMs, SHA256SUMS, draft release) | ✅ | Dry run green (workflow_dispatch, 19 Nov 2026) |
 | Build provenance attestations | ⚠️ | In the workflow, tag runs only; GitHub supports them on private repos only with Enterprise Cloud, so first exercised at the public v0.1.0 (Phase 9) |
 ## Phase 8 — Docs, diagrams, genuine screenshots ⏳
+| Task | Status | Notes |
+| --- | --- | --- |
+| README for beginners; installation, upgrade, admin, troubleshooting, security, developer guides | ✅ | `abd8bde` |
+| Mermaid diagrams (≥ 9) | ✅ | 11, rendered with mermaid-cli 11.4.2; `tests/unit/test_docs.py` |
+| Test results with versions | ✅ | `docs/development/test-results.md` |
+| Clean-machine install from the guide | ✅ | Fresh Ubuntu 24.04 host, 27 min (`tests/operational/clean_machine.sh`); found and fixed two setup bugs |
+| Genuine screenshots of `/ai`, builds and `mcai`, labelled | ⏳ | Needs the maintainer at a client |
 ## Phase 9 — Publication-readiness report → owner approval → public ⏳
 
 ## Risks / open issues

@@ -20,8 +20,8 @@ Recorded on 20 November 2026.
 | Mermaid diagrams render (11 diagrams, mermaid-cli 11.4.2) | Laptop | **Pass** |
 | In game with a real Minecraft client: join, `/ai ask` with real Claude, `/ai build` → approve → undo, Atlantis Lite and Full install, automations | Test server on the laptop | **Pass** (19-20 Nov; [screenshots](../../examples/atlantis/README.md#in-game)) |
 
-CI: run [44640822594](https://github.com/JasonEamesLamarca/minecraft-claude-platform/actions/runs/44640822594)
-on commit `bfe5d00`: all 10 jobs green. Release dry run:
+CI: run [44699809339](https://github.com/JasonEamesLamarca/minecraft-claude-platform/actions/runs/44699809339)
+on commit `abd8bde`: all 10 jobs green. Release dry run:
 [44634548536](https://github.com/JasonEamesLamarca/minecraft-claude-platform/actions/runs/44634548536).
 
 ## What the operational test runs
