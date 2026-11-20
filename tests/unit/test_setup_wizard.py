@@ -157,3 +157,26 @@ def test_rerun_keeps_stored_credential(workdir):
     r = run_setup(workdir)                       # non-interactive re-run, no --ai-auth: nothing to type
     assert r.returncode == 0, r.stderr
     assert (workdir / "secrets" / "ai_credential").read_text() == "sk-ant-api03-test"
+
+
+def _fake_curl(tmp_path, code):
+    """A curl on PATH that answers every Mojang lookup with one HTTP status, so no request leaves the machine."""
+    bin_ = tmp_path / "fakebin"
+    bin_.mkdir()
+    (bin_ / "curl").write_text(f"#!/bin/sh\nprintf {code}\n")
+    (bin_ / "curl").chmod(0o755)
+    import os
+    return {"MCAI_SKIP_NAME_CHECK": "", "PATH": f"{bin_}:{os.environ['PATH']}"}
+
+
+def test_owner_without_a_minecraft_account_is_refused(workdir, tmp_path):
+    r = run_setup(workdir, *VALID, extra_env=_fake_curl(tmp_path, 404))
+    assert r.returncode != 0
+    assert "no Minecraft Java account" in r.stderr
+
+
+@pytest.mark.parametrize("code,warned", [(200, False), (429, True), (500, True)])
+def test_owner_lookup_found_or_unknown_continues(workdir, tmp_path, code, warned):
+    r = run_setup(workdir, *VALID, extra_env=_fake_curl(tmp_path, code))
+    assert r.returncode == 0, r.stderr
+    assert ("Couldn't check" in r.stderr) == warned

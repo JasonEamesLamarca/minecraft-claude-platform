@@ -13,6 +13,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REF="${1:-HEAD}"
+OWNER="${MCAI_TEST_OWNER:-Notch}"   # a real Java account name: the server looks the owner up at Mojang
 UBUNTU="ubuntu@sha256:ab18ecc70c55c703eae968948f9f1dbbe662aa8d9badac7c982e6a6237b9d74c"   # 24.04
 NAME="mcai-clean-$$"
 WORK="$(mktemp -d)"; chmod 755 "$WORK"          # the host's non-root user reads it
@@ -62,7 +63,7 @@ useradd -m -s /bin/bash alex
 usermod -aG docker alex                          # the guide's `sudo usermod -aG docker $USER`
 su - alex -c 'docker run --rm hello-world >/dev/null && echo "hello-world OK"; docker compose version'
 
-su - alex -c 'bash /in/user.sh'
+su - alex -c "OWNER=$OWNER bash /in/user.sh"
 HOST
 
 cat > "$WORK/user.sh" <<'USER'
@@ -83,7 +84,7 @@ set timeout 1800
 log_user 1
 spawn scripts/setup.sh
 expect "accept the Minecraft EULA"       { send "yes\r" }
-expect "Minecraft Java username"         { send "CleanTester\r" }
+expect "Minecraft Java username"         { send "$env(OWNER)\r" }
 expect "Game port"                       { send "\r" }
 expect "Java heap"                       { send "2G\r" }
 expect "Choose 1, 2 or 3"                { send "3\r" }
@@ -97,7 +98,7 @@ expect {
 catch wait result
 exit [lindex $result 3]
 EXP
-expect /tmp/wizard.exp | tee /tmp/wizard.log
+OWNER="$OWNER" expect /tmp/wizard.exp | tee /tmp/wizard.log
 
 step "4. Start and check"
 scripts/wait-healthy.sh minecraft 900
@@ -128,5 +129,5 @@ docker volume create "$NAME-docker" >/dev/null
 docker run -d --privileged --cgroupns=private --name "$NAME" --hostname cleanhost -v "$NAME-docker:/var/lib/docker" \
   -v "$WORK:/in:ro" "$UBUNTU" sleep infinity >/dev/null
 start=$(date +%s)
-docker exec "$NAME" bash /in/host.sh
+docker exec -e OWNER="$OWNER" "$NAME" bash /in/host.sh
 echo "total: $(( ($(date +%s) - start) / 60 )) min"

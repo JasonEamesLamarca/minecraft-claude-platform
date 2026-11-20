@@ -118,8 +118,26 @@ env_set PUID "$(id -u)"; env_set PGID "$(id -g)"
 
 # ---------- 4. Minecraft settings ----------
 info ""; info "${c_bld}Minecraft server${c_off}"
-OWNER="${OWNER:-$(ask "Your Minecraft Java username (server owner; whitelisted + operator)" "$(env_get MC_OWNER)")}"
-[[ "$OWNER" =~ ^[A-Za-z0-9_]{3,16}$ ]] || die "'$OWNER' is not a valid Minecraft username (3-16 letters, digits, underscore)."
+# With online-mode the server looks the owner up at Mojang at every start, and a name without an account makes it
+# restart in a loop ("Could not resolve user"). Check it now: 404 = no such account; anything else = can't tell.
+owner_exists() {  # owner_exists NAME -> 0 exists or unknown, 1 no such account
+  [[ "${MCAI_SKIP_NAME_CHECK:-}" == 1 || "$(env_get MC_ONLINE_MODE)" == false ]] && return 0
+  command -v curl >/dev/null || { warn "curl not found: couldn't check that '$1' is a Minecraft Java account."; return 0; }
+  local code; code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://api.mojang.com/users/profiles/minecraft/$1" || true)"
+  case "$code" in
+    200) ok "Minecraft Java account '$1' found" ;;
+    404) return 1 ;;
+    *) warn "Couldn't check that '$1' is a Minecraft Java account (HTTP ${code:-error}). If it isn't, the server won't start." ;;
+  esac
+}
+while :; do
+  OWNER="${OWNER:-$(ask "Your Minecraft Java username (server owner; whitelisted + operator)" "$(env_get MC_OWNER)")}"
+  [[ "$OWNER" =~ ^[A-Za-z0-9_]{3,16}$ ]] || die "'$OWNER' is not a valid Minecraft username (3-16 letters, digits, underscore)."
+  owner_exists "$OWNER" && break
+  $NONINTERACTIVE && die "There is no Minecraft Java account named '$OWNER'. Check the spelling (it's the name shown in the launcher)."
+  warn "There is no Minecraft Java account named '$OWNER'. Check the spelling: it's the name shown in the launcher."
+  OWNER=""
+done
 env_set MC_OWNER "$OWNER"
 PORT="${PORT:-$(ask "Game port" "$(env_get MC_PORT)")}"; PORT="${PORT:-25565}"
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1024 || PORT > 65535 )); then die "Port must be a number between 1024 and 65535."; fi

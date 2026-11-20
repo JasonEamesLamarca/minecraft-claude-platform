@@ -1,4 +1,6 @@
 """Shared fixtures: a throw-away copy of the deployment files, so tests never touch the real .env/secrets."""
+from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -19,10 +21,12 @@ def workdir(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def run_setup(workdir: Path, *args: str, stdin: str = "") -> subprocess.CompletedProcess:
+def run_setup(workdir: Path, *args: str, stdin: str = "", extra_env: dict | None = None) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("MC_", "AI_", "ANTHROPIC", "CLAUDE"))}
     env["COMPOSE_PROJECT_NAME"] = "mcai-test"
     env["MCAI_SKIP_MOD_BUILD"] = "1"
+    env["MCAI_SKIP_NAME_CHECK"] = "1"      # no Mojang lookups from unit tests
+    env.update(extra_env or {})
     return subprocess.run(
         ["bash", str(workdir / "scripts" / "setup.sh"), "--non-interactive", *args],
         input=stdin, capture_output=True, text=True, env=env, cwd=workdir, timeout=120,
