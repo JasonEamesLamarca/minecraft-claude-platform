@@ -1,6 +1,7 @@
 # Architecture overview
 
-> Implemented through Phase 6 (0.6.0).
+> Describes version 0.6.2. Every component below is implemented and tested; the
+> [task board](../development/TASKS.md) tracks what is still open.
 
 ## Components
 
@@ -49,7 +50,38 @@ flowchart LR
 The gateway has no internet access: the client downloads, and the gateway re-checks everything it receives
 (ADR-0012).
 
-## High-level flow
+## Asking a question
+
+```mermaid
+sequenceDiagram
+  actor P as Player
+  participant M as minecraft (mod)
+  participant G as gateway
+  participant W as ai-worker
+  participant E as egress-proxy
+  participant A as api.anthropic.com
+  P->>M: /ai ask how do I make a torch?
+  M->>G: request {player UUID, text}
+  G->>G: role, rate limit, daily budget
+  G-->>M: "Thinking…" (request id)
+  W->>G: long poll: next job
+  G->>W: job (player text delimited as untrusted)
+  W->>E: CONNECT api.anthropic.com:443
+  E->>E: allowlist + public address check
+  E->>A: TLS tunnel (Claude Code, no tools)
+  A-->>W: answer
+  W->>G: result {text, cost}
+  G->>G: record spend, audit
+  M->>G: long poll: events
+  G-->>M: answer for the player
+  M-->>P: [AI] answer in chat
+```
+
+The mod and the worker both *pull* from the gateway (long polls), so the gateway never opens a connection to
+anything. If the worker is down, questions wait in the queue; if the gateway restarts, the mod reconnects.
+
+## Building
+
 
 ```mermaid
 sequenceDiagram

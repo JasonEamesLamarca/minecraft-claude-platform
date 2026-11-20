@@ -118,12 +118,19 @@ env_set PUID "$(id -u)"; env_set PGID "$(id -g)"
 
 # ---------- 4. Minecraft settings ----------
 info ""; info "${c_bld}Minecraft server${c_off}"
-# With online-mode the server looks the owner up at Mojang at every start, and a name without an account makes it
-# restart in a loop ("Could not resolve user"). Check it now: 404 = no such account; anything else = can't tell.
+# With online-mode the server looks the owner up at every start (through Playerdb), and a name without an account
+# makes it restart in a loop ("Could not resolve user from Playerdb"). Check now with the same service, falling
+# back to Mojang's API. Not found -> ask again; can't tell (offline, rate-limited) -> warn and go on.
 owner_exists() {  # owner_exists NAME -> 0 exists or unknown, 1 no such account
   [[ "${MCAI_SKIP_NAME_CHECK:-}" == 1 || "$(env_get MC_ONLINE_MODE)" == false ]] && return 0
   command -v curl >/dev/null || { warn "curl not found: couldn't check that '$1' is a Minecraft Java account."; return 0; }
-  local code; code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://api.mojang.com/users/profiles/minecraft/$1" || true)"
+  local body code; body="$(mktemp)"
+  code="$(curl -s -m 10 -o "$body" -w '%{http_code}' "https://playerdb.co/api/player/minecraft/$1" || true)"
+  if [[ "$code" == 400 ]] && grep -q 'invalid_username' "$body"; then rm -f "$body"; return 1; fi
+  rm -f "$body"
+  if [[ "$code" != 200 ]]; then
+    code="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "https://api.mojang.com/users/profiles/minecraft/$1" || true)"
+  fi
   case "$code" in
     200) ok "Minecraft Java account '$1' found" ;;
     404) return 1 ;;

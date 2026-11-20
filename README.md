@@ -1,65 +1,96 @@
 # Minecraft AI Platform
 
-> **Status: pre-alpha, Phase 6.** What works today:
->
-> - a hardened Fabric server with backups and a setup wizard;
-> - **`/ai ask`** for questions;
-> - **`/ai build`**, with a preview, `/ai approve` and `/ai undo`;
-> - **roles** per player UUID (builder, operator, admin…);
-> - **remote administration** with the `mcai` command line over a locked-down SSH gateway, with a tamper-evident
->   audit log;
-> - **automations** on events or schedules, with 11 [examples](automation-examples/);
-> - **[Atlantis](examples/atlantis/README.md)**, an original underwater city you can download, verify, install and
->   roll back with `mcai examples`.
->
-> Read [installation](docs/installation/README.md) and [administration](docs/administration/README.md) to get
-> started.
-> [`docs/development/TASKS.md`](docs/development/TASKS.md) tracks what actually works.
+Run your own Minecraft Java server with Claude as an in-game assistant: players ask questions and design builds in
+chat, and you stay in control of what the AI may change.
 
-## Quick start (what works now)
+![The central tower of Atlantis, an example build you can install, seen from its plaza under the glass dome](examples/atlantis/screenshots/game-central-tower.jpg)
+
+> **Status: pre-release (0.6.2).** Everything listed below works and is tested; see the
+> [task board](docs/development/TASKS.md) for what's verified where. Expect changes before 1.0.
+
+## What you get
+
+- **A Minecraft server that's set up properly:** Fabric 1.21.1 in Docker, with a whitelist, daily backups, health
+  checks and a setup wizard. Players need no mods: plain Minecraft Java Edition joins.
+- **`/ai ask`:** players ask Claude anything ("how do I make a torch?") and the answer appears in their chat.
+- **`/ai build`:** players describe a build ("a small lighthouse here"). The AI designs it, the player sees a
+  preview, someone with the right role approves it, and it's built. Every build can be undone with `/ai undo`.
+- **Roles:** owner, admin, operator, builder, player, auditor. They're tied to each player's account, so who may use
+  the AI, build and approve is up to you.
+- **Remote administration:** the `mcai` command line and terminal UI work from your laptop over SSH, with keys only
+  and no shell. Every change goes to a tamper-evident audit log.
+- **Automations:** greet players, show a tour or save the world on a schedule, triggered by events or times.
+  There are [11 examples](automation-examples/). The AI can propose automations; a human approves them.
+- **[Atlantis](examples/atlantis/README.md):** an original underwater city, 1,200 blocks across, under a glass dome.
+  `mcai examples` downloads it, checks it and installs it, and can roll it back.
+
+**Safe by design:** Claude never gets a shell, files, server commands or operator rights. It can only *propose*
+actions from a fixed list. The platform checks every proposal against the player's role, the area and a block
+budget, and nothing is built without approval. The AI can reach only Anthropic's API, and spending has daily
+limits. Details: [security guide](docs/security/README.md).
+
+## What you need
+
+- A computer that stays on while people play: Linux, macOS or Windows, with **6-8 GB of RAM** free, 2 CPU cores and
+  10 GB of disk. Linux on x86_64 is the tested setup; see [supported hosts](docs/installation/README.md#supported-hosts).
+- [Docker](https://docs.docker.com/get-docker/) with Compose 2.24 or newer.
+- **Minecraft Java Edition 1.21.1** for each player.
+- For the AI, one of:
+  - an [Anthropic API key](https://console.anthropic.com/) (pay per use, recommended);
+  - a Claude subscription token.
+
+  Without either, everything except `/ai` works.
+
+## Quick start
 
 ```bash
 git clone https://github.com/JasonEamesLamarca/minecraft-claude-platform.git
 cd minecraft-claude-platform
-scripts/setup.sh        # checks prerequisites, asks you to accept the Minecraft EULA, generates secrets, starts the server
-scripts/doctor.sh       # health and diagnostics
-management-cli/mcai status   # after `mcai remote add ...` printed by setup.sh
+scripts/setup.sh
 ```
 
-A self-hosted, Docker Compose–based platform that connects a Minecraft Java Edition server to
-[Claude Code](https://docs.anthropic.com/en/docs/claude-code), for home use:
+The wizard checks your computer, asks you to accept the [Minecraft EULA](https://www.minecraft.net/eula), asks a
+few questions (your Minecraft name, the AI credential, your SSH key), then builds and starts everything. The first
+start downloads Minecraft and takes 5 to 15 minutes. Then:
 
-- **Minecraft server.** Fabric, via the [`itzg/minecraft-server`](https://github.com/itzg/docker-minecraft-server)
-  image. The server binaries are downloaded at install time, never shipped in this repo.
-- **AI in the game.** Players use `/ai ask`, `/ai build`, `/ai approve` and related commands, which go through a
-  server-side Fabric mod (players need no client mod).
-- **Safe by design.** Claude never gets a shell, RCON or operator rights. It returns structured action proposals,
-  which an allowlisted executor checks against role, region and block budgets. World changes are previewed,
-  approved, logged and can be rolled back.
-- **Automations.** These can run on events (join, zone entry, advancement…) or on a schedule, with loop, rate and
-  token guards. Claude can propose an automation, but a human approves it.
-- **SSH management console (`mcai`).** Key-only access with restricted commands, role-based access control and an
-  audit log. There is no host shell and no Docker socket in untrusted containers.
-- **Atlantis example.** An original underwater city (Lite: a quick cutaway; Full: the whole domed city) that is
-  downloaded, verified against pinned checksums, installed with undo snapshots and rolled back with
-  `mcai examples`.
+1. In Minecraft: **Multiplayer → Add Server → `localhost:25565`** (or this computer's LAN address from another one).
+2. In game: `/ai ask how do I make a torch?`
+3. On your computer: `scripts/doctor.sh` checks everything, and `management-cli/mcai status` shows the server, the AI
+   and the backups.
 
-## Architecture
+The [installation guide](docs/installation/README.md) explains each step, the memory settings and how to let
+friends join.
+
+## How it fits together
 
 ```mermaid
 flowchart LR
-  P[Player<br/>Minecraft client] -->|game protocol| MC[minecraft<br/>Fabric + mcai mod]
-  MC <-->|authenticated local API| GW[gateway<br/>action schema + executor]
-  GW <-->|jobs| AI[ai-worker<br/>Claude Code, restricted tools]
-  GW --- AU[automation engine<br/>events + scheduler]
-  GW <--> DB[(state + audit<br/>SQLite)]
-  A[Admin laptop<br/>mcai CLI / TUI] -->|SSH, keys only| SSH[ssh-gateway<br/>forced commands]
-  SSH --> MG[management API<br/>RBAC]
-  MG --> GW
+  P[Players<br/>Minecraft Java] -->|game| MC[minecraft<br/>Fabric + mcai mod]
+  MC <-->|token-authenticated API| GW[gateway<br/>roles, budgets, plans,<br/>automations, audit]
+  GW <-->|jobs| AI[ai-worker<br/>Claude Code, no shell]
+  AI -->|HTTPS, allowlisted| EP[egress-proxy]
+  EP --> ANT[Anthropic API]
+  ADM[Your laptop<br/>mcai CLI / TUI] -->|SSH, keys only| SSH[ssh-gateway<br/>forced command]
+  SSH --> GW
+  BK[backup] -->|daily| MC
 ```
 
-Details: [`docs/architecture/overview.md`](docs/architecture/overview.md) and the decision records in
-[`docs/architecture/adr/`](docs/architecture/adr/).
+Six containers on one host. Only the game port and the SSH port (on 127.0.0.1 by default) are published. The
+[architecture overview](docs/architecture/overview.md) and the
+[decision records](docs/architecture/adr/README.md) explain the design.
+
+## Documentation
+
+| Guide | For |
+| --- | --- |
+| [Installation](docs/installation/README.md) | Getting it running, memory sizing, letting friends join |
+| [Administration](docs/administration/README.md) | Players and roles, `mcai`, backups and restore, AI settings, automations, Atlantis |
+| [Upgrading](docs/upgrade/README.md) | Moving to a new release, and back |
+| [Troubleshooting](docs/troubleshooting/README.md) | Symptoms, causes and fixes |
+| [Security](docs/security/README.md) | What's protected, what you decide, a checklist before opening up |
+| [Architecture](docs/architecture/overview.md) | Services, flows, networks, decisions |
+| [Development](docs/development/README.md) | Building, testing, CI and releases |
+| [Test results](docs/development/test-results.md) | What was tested, on what, with which versions |
 
 ## Repository layout
 
@@ -67,11 +98,12 @@ Details: [`docs/architecture/overview.md`](docs/architecture/overview.md) and th
 | --- | --- |
 | `containers/` | One folder per service image (minecraft, claude, gateway, management) |
 | `minecraft-mod/` | Server-side Fabric mod (`/ai` commands, events to the gateway) |
+| `src/mcai/` | Gateway, AI worker, egress proxy, SSH dispatcher (Python, standard library only) |
 | `management-cli/` | `mcai` command-line client and terminal UI |
 | `automation-examples/` | Example automation definitions |
-| `examples/` | `catalog.json` (packs and pinned checksums) and `atlantis/`: the generator, automations, renders. Pack files ship as release assets. |
-| `docs/` | Architecture, installation, administration, security, development |
-| `scripts/` | Setup wizard and maintenance scripts |
+| `examples/` | `catalog.json` (packs and pinned checksums) and `atlantis/`: the generator, automations, screenshots. Pack files ship as release assets |
+| `docs/` | The guides above |
+| `scripts/` | Setup wizard, doctor, backup, restore, builds |
 | `tests/` | Unit, integration, security and operational tests |
 
 ## Contributing, security, license

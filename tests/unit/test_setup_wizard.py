@@ -159,18 +159,22 @@ def test_rerun_keeps_stored_credential(workdir):
     assert (workdir / "secrets" / "ai_credential").read_text() == "sk-ant-api03-test"
 
 
-def _fake_curl(tmp_path, code):
-    """A curl on PATH that answers every Mojang lookup with one HTTP status, so no request leaves the machine."""
+def _fake_curl(tmp_path, code, body="{}"):
+    """A curl on PATH that answers every lookup (Playerdb, Mojang) with one status and body; nothing leaves the machine."""
     bin_ = tmp_path / "fakebin"
     bin_.mkdir()
-    (bin_ / "curl").write_text(f"#!/bin/sh\nprintf {code}\n")
+    (bin_ / "body").write_text(body)
+    (bin_ / "curl").write_text(
+        "#!/bin/sh\nout=/dev/null\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\n"
+        f"cat '{bin_ / 'body'}' > \"$out\"\nprintf {code}\n")
     (bin_ / "curl").chmod(0o755)
     import os
     return {"MCAI_SKIP_NAME_CHECK": "", "PATH": f"{bin_}:{os.environ['PATH']}"}
 
 
-def test_owner_without_a_minecraft_account_is_refused(workdir, tmp_path):
-    r = run_setup(workdir, *VALID, extra_env=_fake_curl(tmp_path, 404))
+@pytest.mark.parametrize("code,body", [(400, '{"code":"minecraft.invalid_username"}'), (404, "{}")])
+def test_owner_without_a_minecraft_account_is_refused(workdir, tmp_path, code, body):
+    r = run_setup(workdir, *VALID, extra_env=_fake_curl(tmp_path, code, body))
     assert r.returncode != 0
     assert "no Minecraft Java account" in r.stderr
 

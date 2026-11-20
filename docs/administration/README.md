@@ -29,6 +29,28 @@ By default SSH listens on this computer only (`MCAI_SSH_BIND=127.0.0.1`). Re-run
 "Allow administration from other computers" to listen on your network. **Don't** forward port 2222 on your
 router: use a VPN to administer from outside.
 
+What happens when you run a command:
+
+```mermaid
+sequenceDiagram
+  actor A as You (mcai on your computer)
+  participant S as ssh-gateway
+  participant G as gateway (management API)
+  participant M as minecraft
+  A->>S: ssh, your key, pinned host key
+  S->>S: key known? ForceCommand:<br/>no shell, no terminal, no forwarding
+  S->>G: the command line + the account that owns the key
+  G->>G: role has the permission?<br/>(owner, admin, operator, builder, auditor, player)
+  alt allowed
+    G->>M: allowlisted action (RCON or mod event)
+    G->>G: audit record (hash-chained)
+    G-->>A: result
+  else not allowed
+    G->>G: audit record (refused)
+    G-->>A: not permitted
+  end
+```
+
 ### Commands
 
 `mcai help` lists everything, and `mcai help <command>` shows the details. The most used:

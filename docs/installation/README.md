@@ -1,13 +1,15 @@
 # Installation
 
-> Phase 4 status: this installs the **Minecraft server with backups, `/ai ask` and `/ai build`, roles, and remote
-> administration over SSH**. Automations and the Atlantis example arrive in later phases. Everything below was run on the "verified" setup in the table, unless marked otherwise.
+This guide takes you from a computer with nothing installed to a running server you can join. It takes about
+30 minutes, most of it downloads. Each step was run, exactly as written, on a fresh Ubuntu 24.04 host
+(`tests/operational/clean_machine.sh`); the table below says which other systems were tried.
 
 ## Supported hosts
 
 | Host | Architecture | Status |
 | --- | --- | --- |
 | Pop!_OS 26.04 (Ubuntu base), Docker Engine 29.1, Compose 2.40 | x86_64 | **Verified** (manual + `tests/operational/first_start.sh`) |
+| Ubuntu 24.04, fresh host, Docker CE 29.10 from Docker's apt repository, Compose 5.8 | x86_64 | **Verified** (clean-machine install, `tests/operational/clean_machine.sh`) |
 | GitHub Actions `ubuntu-24.04` runner | x86_64 | **Verified in CI** (operational job) |
 | Other Linux with Docker Engine ≥ 24 and Compose ≥ 2.24 (Debian, Ubuntu, Fedora…) | x86_64 / arm64 | Expected to work, **unverified** |
 | macOS with Docker Desktop | Apple silicon / Intel | Expected to work, **unverified** |
@@ -52,12 +54,29 @@ cd minecraft-claude-platform
 scripts/setup.sh
 ```
 
+```mermaid
+flowchart TD
+  P[Check prerequisites:<br/>Docker, Compose, disk] --> E{Accept the<br/>Minecraft EULA?}
+  E -->|no| X[Stop: nothing downloaded]
+  E -->|yes| O[Owner name, game port,<br/>Java heap]
+  O --> S[Generate secrets<br/>in secrets/]
+  S --> AI{AI credential}
+  AI -->|API key / token| C[secrets/ai_credential<br/>AI worker only]
+  AI -->|skip| N["/ai replies that it isn't set up"]
+  C --> K[SSH: owner public key,<br/>localhost or LAN]
+  N --> K
+  K --> B[Build the server mod<br/>in a container]
+  B --> U[docker compose up -d --build]
+  U --> R[Prints the mcai remote add line]
+```
+
 It will:
 
 1. Check prerequisites: Docker, Compose version, architecture, disk space.
 2. Ask you to read and accept the [Minecraft EULA](https://www.minecraft.net/eula). Nothing is downloaded or
    started unless you type `yes`.
-3. Ask for **your Minecraft Java username**. You become the only operator and the first whitelisted player.
+3. Ask for **your Minecraft Java username**, the name your launcher shows, and check that the account
+   exists. You become the only operator and the first whitelisted player.
 4. Ask for the game port (default 25565) and the Java heap size (e.g. `4G`). The container memory limit is set to
    about 1.5× the heap.
 5. Generate random internal secrets in `secrets/` (mode 600), such as the RCON password.
@@ -94,8 +113,8 @@ scripts/doctor.sh             # prerequisites, config, health, resource use, rec
 ```
 
 The first start downloads Minecraft, the Fabric loader and Fabric API, and builds the gateway and AI worker
-images. This takes a few minutes. Five services run: `minecraft`, `backup`, `gateway`, `ai-worker` and
-`ssh-gateway`.
+images. This takes a few minutes. Six services run: `minecraft`, `backup`, `gateway`, `ai-worker`,
+`egress-proxy` and `ssh-gateway`.
 
 **Test administration:** `management-cli/mcai status` (after the `mcai remote add` line from the wizard). See
 [Remote administration and roles](../administration/README.md#remote-administration-and-roles).
@@ -125,14 +144,16 @@ Only whitelisted players can join. To add a friend, see [administration](../admi
 
 ## Updating
 
+Back up, check out the new release, re-run the wizard and rebuild:
+
 ```bash
-git pull
-scripts/setup.sh              # adds any new settings, keeps yours
-docker compose pull && docker compose up -d
+scripts/backup.sh
+git fetch --tags && git checkout vX.Y.Z
+scripts/setup.sh              # keeps your answers, rebuilds the mod, offers to restart
 ```
 
-Image versions are pinned in `compose.yaml`, so an update changes them only when you pull a new platform version.
-Take a backup first (`scripts/backup.sh`).
+The [upgrade guide](../upgrade/README.md) has the details, including backing up the gateway's state and rolling
+back.
 
 ## Removing the platform
 
