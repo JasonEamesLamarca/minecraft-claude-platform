@@ -49,6 +49,13 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
   > /etc/apt/sources.list.d/docker.list
 apt-get update -qq
 apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
+# Nested Docker on cgroup v2: move this host's processes into a child cgroup so dockerd can delegate controllers
+# (what the docker:dind image does at start). Not needed on a real machine.
+if [[ -f /sys/fs/cgroup/cgroup.controllers ]]; then
+  mkdir -p /sys/fs/cgroup/init
+  xargs -rn1 < /sys/fs/cgroup/cgroup.procs > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true
+  sed -e 's/ / +/g' -e 's/^/+/' < /sys/fs/cgroup/cgroup.controllers > /sys/fs/cgroup/cgroup.subtree_control
+fi
 (dockerd > /var/log/dockerd.log 2>&1 &)          # no systemd in this host; the package would start it
 for _ in $(seq 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
 useradd -m -s /bin/bash alex
@@ -84,11 +91,9 @@ expect "other computers on your network" { send "\r" }
 expect "Public key file"                 { send "\r" }
 expect "Start the server now"            { send "\r" }
 expect {
-  "mcai status" { }
-  timeout       { puts "\nwizard timed out"; exit 1 }
-  eof           { }
+  timeout { puts "\nwizard timed out"; exit 1 }
+  eof
 }
-expect eof
 catch wait result
 exit [lindex $result 3]
 EXP
@@ -120,7 +125,7 @@ USER
 chmod 755 "$WORK"/*.sh; chmod 644 "$WORK/repo.bundle"
 echo "clean-machine install of $COMMIT in a fresh Ubuntu 24.04 host ($NAME)"
 docker volume create "$NAME-docker" >/dev/null
-docker run -d --privileged --name "$NAME" --hostname cleanhost -v "$NAME-docker:/var/lib/docker" \
+docker run -d --privileged --cgroupns=private --name "$NAME" --hostname cleanhost -v "$NAME-docker:/var/lib/docker" \
   -v "$WORK:/in:ro" "$UBUNTU" sleep infinity >/dev/null
 start=$(date +%s)
 docker exec "$NAME" bash /in/host.sh
