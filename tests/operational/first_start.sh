@@ -48,25 +48,25 @@ R() { docker compose exec -T minecraft rcon-cli "$@"; }
 # Host port bindings of a service ("{}" = nothing published). Note: `docker compose port` prints ":0" and
 # succeeds for ports an image merely EXPOSEs, so it can't be used for this check.
 bindings() { docker inspect "$(docker compose ps -q "$1")" --format '{{json .HostConfig.PortBindings}}'; }
-has_marker() { R "execute if block 0 -60 0 minecraft:diamond_block run forceload query 0 0" | grep -q "marked for force loading"; }
+has_marker() { R "execute if block 0 -60 0 minecraft:diamond_block run forceload query 0 0" | grep >/dev/null "marked for force loading"; }
 
 step "whitelist + ops contain the owner by UUID"
 grep -q '"uuid"' data/minecraft/whitelist.json && grep -q '"level": 4' data/minecraft/ops.json
 
 step "RCON is not reachable from the host's published ports"
-if bindings minecraft | grep -q '25575'; then echo "RCON published!"; exit 1; fi
-bindings minecraft | grep -q '"25565/tcp"' && echo "ok: only the game port is published on minecraft"
+if bindings minecraft | grep >/dev/null '25575'; then echo "RCON published!"; exit 1; fi
+bindings minecraft | grep >/dev/null '"25565/tcp"' && echo "ok: only the game port is published on minecraft"
 
 step "AI round trip: /ai ask from the console -> mod -> gateway -> worker (mock) -> mod"
-docker compose logs minecraft | grep -q '\[mcai\] ready: /ai'
+docker compose logs minecraft | grep >/dev/null '\[mcai\] ready: /ai'
 R "ai ask optest question"
 for _ in $(seq 1 20); do
-  docker compose logs --since 2m minecraft | grep -q '\[AI\] \[mock\] You asked: optest question' && break; sleep 1
+  docker compose logs --since 2m minecraft | grep >/dev/null '\[AI\] \[mock\] You asked: optest question' && break; sleep 1
 done
-docker compose logs --since 2m minecraft | grep -q '\[AI\] \[mock\] You asked: optest question'
+docker compose logs --since 2m minecraft | grep >/dev/null '\[AI\] \[mock\] You asked: optest question'
 AUDIT() { cat data/gateway/audit/audit-*.jsonl; }
-AUDIT | grep -q '"event": "request.done"'
-if AUDIT | grep -q 'optest question'; then echo "request text leaked into audit log"; exit 1; fi
+AUDIT | grep >/dev/null '"event": "request.done"'
+if AUDIT | grep >/dev/null 'optest question'; then echo "request text leaked into audit log"; exit 1; fi
 
 step "AI build: /ai build -> preview -> /ai approve -> blocks placed -> /ai undo -> area restored (mock plan at spawn)"
 R "ai build a test pillar"
@@ -77,7 +77,7 @@ done
 [[ -n "$prev" ]] || { echo "no build preview"; exit 1; }
 rid="$(echo "$prev" | grep -oE 'Proposal [0-9a-f]{6}' | cut -d' ' -f2)"
 read -r x1 y1 z1 _ y2 _ < <(echo "$prev" | grep -oE 'at -?[0-9]+ -?[0-9]+ -?[0-9]+ \.\. -?[0-9]+ -?[0-9]+ -?[0-9]+' | sed 's/^at //; s/ \.\. / /')
-is_block() { R "execute if block $1 $2 $3 $4 run seed" | grep -q Seed; }
+is_block() { R "execute if block $1 $2 $3 $4 run seed" | grep >/dev/null Seed; }
 if is_block "$x1" "$y1" "$z1" minecraft:stone_bricks; then echo "pillar present before approval"; exit 1; fi
 R "ai approve $rid"
 for _ in $(seq 1 60); do is_block "$x1" "$y1" "$z1" minecraft:stone_bricks && break; sleep 1; done
@@ -88,7 +88,7 @@ test -f "data/minecraft/world/generated/mcai/structures/undo/$rid.nbt"
 R "ai undo $rid"
 for _ in $(seq 1 20); do is_block "$x1" "$y1" "$z1" minecraft:stone_bricks || break; sleep 1; done
 if is_block "$x1" "$y1" "$z1" minecraft:stone_bricks; then echo "undo did not restore the area"; exit 1; fi
-AUDIT | grep -q '"event": "build.rolled_back"'
+AUDIT | grep >/dev/null '"event": "build.rolled_back"'
 echo "ok: build $rid placed, verified and undone"
 for _ in $(seq 1 20); do [[ -f "data/minecraft/world/generated/mcai/structures/undo/$rid.nbt" ]] || break; sleep 1; done
 if [[ -f "data/minecraft/world/generated/mcai/structures/undo/$rid.nbt" ]]; then echo "undo snapshot not pruned"; exit 1; fi
@@ -97,8 +97,8 @@ echo "ok: undo snapshot of $rid deleted after the undo"
 step "AI build: the gateway rejects a forbidden block from the AI (mock TNT plan)"
 sleep 21   # per-player rate limit (3/min) for the console identity
 R "ai build MOCK_BAD_BUILD"
-for _ in $(seq 1 20); do docker compose logs --since 1m minecraft | grep -q "plan was rejected: action 0: tnt is not allowed" && break; sleep 1; done
-docker compose logs --since 1m minecraft | grep -q "plan was rejected: action 0: tnt is not allowed"
+for _ in $(seq 1 20); do docker compose logs --since 1m minecraft | grep >/dev/null "plan was rejected: action 0: tnt is not allowed" && break; sleep 1; done
+docker compose logs --since 1m minecraft | grep >/dev/null "plan was rejected: action 0: tnt is not allowed"
 echo "ok: forbidden block rejected"
 
 step "SSH administration: owner over the mcai CLI, auditor is read-only, escalation refused, revocation works"
@@ -138,9 +138,9 @@ for _ in $(seq 1 15); do set +e; M -r ann status >/dev/null 2>&1; rc=$?; set -e;
 [[ $rc -eq 255 ]] || { echo "revoked key still accepted by sshd (rc=$rc)"; exit 1; }
 echo "ok: revoked key refused by sshd"
 M audit verify | grep >/dev/null 'Audit chain intact'
-AUDIT | grep -q '"result": "accepted"'
-AUDIT | grep -q '"event": "account.key_revoked"'
-AUDIT | grep -q '"event": "mgmt.denied"'
+AUDIT | grep >/dev/null '"result": "accepted"'
+AUDIT | grep >/dev/null '"event": "account.key_revoked"'
+AUDIT | grep >/dev/null '"event": "mgmt.denied"'
 
 step "automations: definition file over SSH, manual run reaches the game, world event from the heartbeat"
 cat > .optest-auto.toml <<'TOML'
@@ -156,8 +156,8 @@ TOML
 M automations validate .optest-auto.toml | grep >/dev/null '^Valid'
 M automations import .optest-auto.toml | grep >/dev/null "Saved 'optest-hello' (version 1): enabled"
 M automations run optest-hello >/dev/null
-for _ in $(seq 1 15); do docker compose logs --since 1m minecraft | grep -q '(broadcast) optest automation ran' && break; sleep 1; done
-docker compose logs --since 1m minecraft | grep -q '(broadcast) optest automation ran'
+for _ in $(seq 1 15); do docker compose logs --since 1m minecraft | grep >/dev/null '(broadcast) optest automation ran' && break; sleep 1; done
+docker compose logs --since 1m minecraft | grep >/dev/null '(broadcast) optest automation ran'
 printf 'id = "optest-bad"\nname = "Bad"\n[trigger]\nevery = "1h"\n[[actions]]\ntype = "command"\ncommand = "op Eve"\n' > .optest-bad.toml
 set +e; out="$(M automations import .optest-bad.toml 2>&1)"; set -e
 [[ "$out" == *"can't run commands"* ]] || { echo "forbidden action accepted: $out"; exit 1; }
@@ -166,10 +166,10 @@ M automations install night-reminder >/dev/null
 printf 'id = "optest-night"\nname = "Night"\nenabled = true\n[trigger]\nevent = "world.night_start"\n[[actions]]\ntype = "log"\ntext = "night fell"\n' > .optest-night.toml
 M automations import .optest-night.toml >/dev/null
 R "time set 1000"; sleep 35; R "time set 13500"            # the heartbeat (every 30 s) carries the world time
-for _ in $(seq 1 25); do AUDIT | grep -q '"message": "night fell"' && break; sleep 2; done
-AUDIT | grep -q '"message": "night fell"' || { echo "night automation did not run"; exit 1; }
+for _ in $(seq 1 25); do AUDIT | grep >/dev/null '"message": "night fell"' && break; sleep 2; done
+AUDIT | grep >/dev/null '"message": "night fell"' || { echo "night automation did not run"; exit 1; }
 M automations runs | grep >/dev/null 'optest-night'
-if docker compose logs minecraft | grep -qi 'mixin.*\(error\|fail\)'; then echo "mixin problem in server log"; exit 1; fi
+if docker compose logs minecraft | grep -i >/dev/null 'mixin.*\(error\|fail\)'; then echo "mixin problem in server log"; exit 1; fi
 echo "ok: automations imported, run, refused and triggered by a world event"
 
 step "examples: Atlantis Lite through the mcai client (local build), checked, installed, rolled back"
@@ -218,12 +218,12 @@ M examples rollback "$iid" --yes | grep >/dev/null 'Rolling back'
 for _ in $(seq 1 120); do M examples status "$iid" | grep >/dev/null ", rolled_back" && break; sleep 5; done
 M examples status "$iid" | grep >/dev/null ", rolled_back" || { echo "rollback did not finish"; exit 1; }
 [[ $(probe_count) -eq 0 ]] || { echo "pack blocks still there after rollback"; exit 1; }
-AUDIT | grep -q '"event": "examples.rolled_back"'
+AUDIT | grep >/dev/null '"event": "examples.rolled_back"'
 while read -r x y z b; do R "forceload remove $x $z" </dev/null >/dev/null; done <<<"$probes"
 echo "ok: rolled back, the area is as before"
 
 step "isolation: only the game port and the SSH gateway (localhost) are published; the AI worker has no host mounts"
-bindings ssh-gateway | grep -q "\"HostIp\":\"127.0.0.1\",\"HostPort\":\"$SSH_PORT\"" \
+bindings ssh-gateway | grep >/dev/null "\"HostIp\":\"127.0.0.1\",\"HostPort\":\"$SSH_PORT\"" \
   || { echo "ssh-gateway binding: $(bindings ssh-gateway)"; exit 1; }
 smounts="$(docker inspect "$(docker compose ps -q ssh-gateway)" --format '{{range .Mounts}}{{.Destination}};{{end}}')"
 [[ "$smounts" == *"/data;"* && "$smounts" != *docker.sock* && "$smounts" != *ai_credential* ]] || { echo "ssh-gateway mounts: $smounts"; exit 1; }
@@ -259,7 +259,7 @@ step "failure: the gateway restarts; the mod reconnects and /ai ask works again"
 mod_online() { for _ in $(seq 1 60); do M status 2>/dev/null | grep >/dev/null 'Server: online' && return 0; sleep 2; done; return 1; }
 ask_and_wait() {   # $1 = question; waits up to $2 seconds for the mock reply in the server log
   R "ai ask $1" >/dev/null
-  for _ in $(seq 1 "${2:-30}"); do docker compose logs --since 5m minecraft | grep -q "You asked: $1" && return 0; sleep 1; done
+  for _ in $(seq 1 "${2:-30}"); do docker compose logs --since 5m minecraft | grep >/dev/null "You asked: $1" && return 0; sleep 1; done
   return 1
 }
 docker compose restart gateway >/dev/null
@@ -272,11 +272,11 @@ step "failure: the AI worker is down; a question waits and is answered when it i
 docker compose stop ai-worker >/dev/null
 R "ai ask while the worker is down" >/dev/null
 sleep 5
-if docker compose logs --since 1m minecraft | grep -q "You asked: while the worker is down"; then
+if docker compose logs --since 1m minecraft | grep >/dev/null "You asked: while the worker is down"; then
   echo "answered without a worker?"; exit 1; fi
 docker compose start ai-worker >/dev/null
-for _ in $(seq 1 60); do docker compose logs --since 3m minecraft | grep -q "You asked: while the worker is down" && break; sleep 1; done
-docker compose logs --since 3m minecraft | grep -q "You asked: while the worker is down" \
+for _ in $(seq 1 60); do docker compose logs --since 3m minecraft | grep >/dev/null "You asked: while the worker is down" && break; sleep 1; done
+docker compose logs --since 3m minecraft | grep >/dev/null "You asked: while the worker is down" \
   || { echo "queued question not answered after the worker came back"; exit 1; }
 echo "ok: queued question answered after the worker restarted"
 
@@ -294,7 +294,7 @@ except OSError as e:
     assert "403" in str(e), e
 print("ok: no direct route; example.com refused by the proxy")
 PY
-docker compose logs egress-proxy | grep -q '"event":"denied".*example.com'
+docker compose logs egress-proxy | grep >/dev/null '"event":"denied".*example.com'
 
 step "failure: the server dies during an example install; the install is interrupted and repair finishes it"
 BX=3000

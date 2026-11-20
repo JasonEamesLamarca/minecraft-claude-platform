@@ -119,7 +119,7 @@ evidence named. Unverified items say so.
 | AI worker egress limited to Anthropic endpoints (allowlist proxy) | ✅ | `test_egress.py` (30), `test_worker_reaches_the_internet_only_through_the_egress_proxy`; laptop: direct connection fails (no DNS), example.com refused (403), real `/ai ask` answered in 2.1 s with only `api.anthropic.com` tunnels (19 Nov 2026) |
 | Failure tests (operational): gateway restart → mod reconnects; AI worker down → question waits and is answered; worker has no direct internet and the proxy refuses other hosts; server killed during an example install → interrupted → `repair` finishes it | ✅ | CI job `operational` green on 957634f. Found a real bug: work handed to a long poll whose client had gone (worker stopped, mod disconnecting) was lost; fixed in the gateway (liveness check + requeue), `test_gateway_flow.py` |
 | Release workflow (mod jar, SBOMs, SHA256SUMS, draft release) | ✅ | Dry run green (workflow_dispatch, 19 Nov 2026) |
-| Build provenance attestations | ⚠️ | In the workflow, tag runs only; GitHub supports them on private repos only with Enterprise Cloud, so first exercised at the public v0.1.0 (Phase 9) |
+| Build provenance attestations | ⚠️ | In the workflow, tag runs only; GitHub supports them on private repos only with Enterprise Cloud, so first exercised at the public v0.6.2 (Phase 9) |
 ## Phase 8 — Docs, diagrams, genuine screenshots ✅
 | Task | Status | Notes |
 | --- | --- | --- |

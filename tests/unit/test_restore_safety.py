@@ -24,6 +24,18 @@ def test_rejects_parent_traversal(workdir):
     assert r.returncode != 0 and "Unsafe paths" in r.stderr
 
 
+def test_rejects_traversal_early_in_a_large_archive(workdir):
+    # The unsafe entry comes first and the listing is long: a 'grep -q' that exits early would SIGPIPE tar, and
+    # with pipefail the check would read as "no unsafe paths".
+    a = workdir / "big.tar.gz"
+    with tarfile.open(a, "w:gz") as t:
+        for i, name in enumerate(["../../etc/evil"] + [f"world/region/f{i:06d}.dat" for i in range(60000)]):
+            info = tarfile.TarInfo(name)
+            t.addfile(info, io.BytesIO(b""))
+    r = run_restore(workdir, a)
+    assert r.returncode != 0 and "Unsafe paths" in r.stderr, (r.returncode, r.stdout[-300:], r.stderr[-300:])
+
+
 def test_rejects_absolute_paths(workdir):
     a = workdir / "evil2.tar.gz"; make_tar(a, "/tmp/evil")
     r = run_restore(workdir, a)

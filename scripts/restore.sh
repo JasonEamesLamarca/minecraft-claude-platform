@@ -14,8 +14,9 @@ if [[ "$src" == latest ]]; then
 fi
 [[ -f "$src" ]] || { echo "No such file: $src" >&2; exit 1; }
 tar tzf "$src" >/dev/null || { echo "$src is not a readable gzip tar archive" >&2; exit 1; }
-# refuse archives with absolute paths or .. components (path traversal)
-if tar tzf "$src" | grep -qE '(^/|(^|/)\.\.(/|$))'; then echo "Unsafe paths in $src - refusing." >&2; exit 1; fi
+# refuse archives with absolute paths or .. components (path traversal). Not 'grep -q': it exits at the first
+# match, tar dies of SIGPIPE, and with pipefail the pipeline would fail, which reads as "nothing unsafe".
+if tar tzf "$src" | grep -E '(^/|(^|/)\.\.(/|$))' >/dev/null; then echo "Unsafe paths in $src - refusing." >&2; exit 1; fi
 echo "Restore $src into $DATA? The server is stopped while restoring; the current data is kept as a copy."
 [[ "$yes" == --yes ]] || { read -r -p "Type 'restore' to continue: " a; [[ "$a" == restore ]] || { echo "Cancelled."; exit 1; }; }
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"

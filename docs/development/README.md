@@ -130,6 +130,8 @@ hand:
 - **Fabric versions:** `minecraft-mod/gradle.properties` and `MC_*` in `.env.example`.
 - **Scanner images** (Trivy, Syft) in the workflows, and the Ubuntu image in `tests/operational/clean_machine.sh`.
 
+When you add or replace a dependency, update [THIRD_PARTY.md](THIRD_PARTY.md) (component, use, license).
+
 ## Rules
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md), the [threat model](../security/threat-model.md) and

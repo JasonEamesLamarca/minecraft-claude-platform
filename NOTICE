@@ -5,5 +5,5 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 This repository does not include Minecraft server or client software. Minecraft is a
 trademark of Mojang Synergies AB; this project is not affiliated with Mojang or Microsoft.
-Third-party components downloaded at install time remain under their own licenses; see
-docs/development/THIRD_PARTY.md once dependencies are added.
+Third-party components are downloaded at build or install time and remain under their own
+licenses; see docs/development/THIRD_PARTY.md.

@@ -37,8 +37,9 @@ jobs:
           mod=$(sed -n 's/^mod_version=//p' minecraft-mod/gradle.properties)
           py=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/mcai/__init__.py)
           cli=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' management-cli/mcai_cli.py)
-          echo "mod=$mod python=$py cli=$cli ref=$GITHUB_REF_NAME"
-          [[ "$mod" == "$py" && "$py" == "$cli" ]] || { echo "::error::versions differ"; exit 1; }
+          pkg=$(sed -n 's/^version = "\(.*\)"/\1/p' management-cli/pyproject.toml)
+          echo "mod=$mod python=$py cli=$cli pkg=$pkg ref=$GITHUB_REF_NAME"
+          [[ "$mod" == "$py" && "$py" == "$cli" && "$cli" == "$pkg" ]] || { echo "::error::versions differ"; exit 1; }
           if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$mod" ]]; then
             echo "::error::tag $GITHUB_REF_NAME does not match version $mod"; exit 1
           fi
