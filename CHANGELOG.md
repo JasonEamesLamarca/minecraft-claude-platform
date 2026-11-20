@@ -5,7 +5,14 @@ and the project uses [Semantic Versioning](https://semver.org/) (pre-1.0: minor 
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-21
+
+First public pre-release.
+
 ### Security
+- `scripts/restore.sh` could skip its check for unsafe paths (absolute or `..`) in a large backup archive: an
+  early-exiting `grep -q` under `pipefail` made a match read as "nothing unsafe". GNU tar's own `..` stripping
+  still kept files inside the data folder. The check now reads the whole listing.
 - The AI worker has no route to the internet any more. Its only way out is the new `egress-proxy` service:
   HTTPS tunnels to the host names in `EGRESS_ALLOW` (default `api.anthropic.com`), never to IP addresses or
   private networks, each one logged.

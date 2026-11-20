@@ -17,11 +17,14 @@ Recorded on 20 November 2026.
 | Operational: the whole stack, mock AI (`tests/operational/first_start.sh`) | CI `operational`, laptop | **Pass** |
 | Clean-machine install from the installation guide (`tests/operational/clean_machine.sh`) | Fresh Ubuntu 24.04 host | **Pass** (27 min, commit `35cf5ad`) |
 | Release workflow, dry run | GitHub Actions (`workflow_dispatch`) | **Pass** (attestation step only runs on tags) |
+| Release `v0.6.2` from the tag | GitHub Actions | **Pass**: jar, 5 SBOMs, `SHA256SUMS` match; each file has a SLSA v1 provenance attestation naming `release.yml`, `refs/tags/v0.6.2` and commit `e77b77e` |
+| Public access without a GitHub login | Repository page, `git clone`, README images, example packs | **Pass**: both packs' manifests and the sections checked match the hashes pinned in `examples/catalog.json` |
 | Mermaid diagrams render (11 diagrams, mermaid-cli 11.4.2) | Laptop | **Pass** |
 | In game with a real Minecraft client: join, `/ai ask` with real Claude, `/ai build` → approve → undo, Atlantis Lite and Full install, automations | Test server on the laptop | **Pass** (19-20 Nov; [screenshots](#screenshots)) |
 
-CI: run [44699809339](https://github.com/JasonEamesLamarca/minecraft-claude-platform/actions/runs/44699809339)
-on commit `abd8bde`: all 10 jobs green. Release dry run:
+CI: run [44831244762](https://github.com/JasonEamesLamarca/minecraft-claude-platform/actions/runs/44831244762)
+on commit `e77b77e` (tagged `v0.6.2`): all 10 jobs green. Release:
+[44833627174](https://github.com/JasonEamesLamarca/minecraft-claude-platform/actions/runs/44833627174). Release dry run:
 [44634548536](https://github.com/JasonEamesLamarca/minecraft-claude-platform/actions/runs/44634548536).
 
 ## What the operational test runs
@@ -104,8 +107,7 @@ are covered with grey boxes in the terminal shots; nothing else is edited.
   scripts are bash), but not run.
 - **Native ARM64 hosts** (Raspberry Pi 5, Apple silicon under Linux). CI builds the arm64 images; nothing has run
   them.
-- **Build provenance attestations.** The release workflow attests on tag runs only, and GitHub supports
-  attestations on private repositories only with Enterprise Cloud. They'll first be checked on the first public
-  release.
-- **Downloads from the public release page without a GitHub login**, while the repository is private.
+- **The attestation signatures.** The attestations exist and their statements were read and match (above), but
+  the signatures weren't checked with `gh attestation verify`: the `gh` on the developer laptop is too old for
+  that command. To check them yourself, see [Verifying a release](../security/README.md#verifying-a-release).
 - **More than a handful of players at once.** The in-game tests used one or two clients.
